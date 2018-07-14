@@ -1,14 +1,22 @@
 # -*- coding: utf-8 -*- 
 '''
-Torrent-telik.com Playlist Downloader Plugin
-(based on ytv plugin by ValdikSS)
-http://ip:port/torrent-telik || http://ip:port/torrent-telik/?type=ttv = torrent-tv playlist
-http://ip:port/torrent-telik/?type=mob_ttv = torrent-tv mobile playlist
-http://ip:port/torrent-telik/?type=allfon = allfon playlist
+Downloader for json-based playlists
+Playlist format example:
+{"channels":[
+{"name":"Channel name 1","url":"blablablablablablablablablablablablablab","cat":"Group 1"},
+{"name":"Channel name 2","url":"blablablablablablablablablablablablablab","cat":"Group 2"},
+{"name":"Channel name 3","url":"blablablablablablablablablablablablablab","cat":"Group 3"},
+......
+...
+..
+.
+{"name":"Channel name N","url":"blablablablablablablablablablablablablab","cat":"Group N"}
+]}
 '''
 
+__author__ = 'miltador, Dorik1972'
+
 import logging
-from urlparse import parse_qs
 import requests
 import time
 from PluginInterface import AceProxyPlugin
@@ -24,11 +32,9 @@ class Torrenttelik(AceProxyPlugin):
     playlisttime = None
 
     def downloadPlaylist(self, url):
-        headers = {'User-Agent': 'Magic Browser', 'Accept-Encoding': 'gzip,deflate', 'Connection': 'close'}
-        proxies = {}; timeout = 5
-        if config.useproxy: proxies=config.proxies; timeout=30
+        headers = {'User-Agent': 'Magic Browser'}
         try:
-            Torrenttelik.playlist = requests.get(url, headers=headers, proxies=proxies, timeout=timeout)
+            Torrenttelik.playlist = requests.get(url, headers=headers, proxies=config.proxies, timeout=30).json()
             Torrenttelik.playlisttime = int(time.time())
             Torrenttelik.logger.info('Torrent-telik playlist %s downloaded' % url)
         except requests.exceptions.ConnectionError:
@@ -47,31 +53,26 @@ class Torrenttelik(AceProxyPlugin):
             connection.end_headers()
             return
 
-        self.params = parse_qs(connection.query)
-
-        url = None
-        list_type = self.getparam('type')
-        if not list_type or list_type.startswith('ttv'): url = config.url_ttv
-        elif list_type.startswith('mob_ttv'): url = config.url_mob_ttv
-        elif list_type.startswith('allfon'): url = config.url_allfon
-
+        self.params = { k:[v] for k,v in (requests.compat.unquote(x).split('=') for x in [s2 for s1 in connection.query.split('&') for s2 in s1.split(';')] if '=' in x) }
         # 15 minutes cache
         if not Torrenttelik.playlist or (int(time.time()) - Torrenttelik.playlisttime > 15 * 60):
-            if not self.downloadPlaylist(url): connection.dieWithError(); return
+            if not self.downloadPlaylist(config.url): connection.dieWithError(); return
 
         add_ts = True if connection.path.endswith('/ts') else False
-        playlistgen = PlaylistGenerator()
+        playlistgen = PlaylistGenerator(m3uchanneltemplate=config.m3uchanneltemplate)
+        Torrenttelik.logger.debug('Generating requested m3u playlist')
 
         try:
-            for channel in Torrenttelik.playlist.json()['channels']:
+            for channel in Torrenttelik.playlist['channels']:
                 channel['group'] = channel.get('cat', '')
+                channel['url'] = 'acestream://%s' % channel.get('url', '')
                 playlistgen.addItem(channel)
         except Exception as e:
             Torrenttelik.logger.error("Can't parse JSON! %s" % repr(e))
             return
 
-        header = '#EXTM3U url-tvg="%s" tvg-shift=%d deinterlace=1 m3uautoload=1 cache=1000\n' %(config.tvgurl, config.tvgshift)
-        exported = playlistgen.exportm3u(hostport, header=header, add_ts=add_ts, fmt=self.getparam('fmt')).encode('utf-8')
+        Torrenttelik.logger.debug('Exporting m3u playlist')
+        exported = playlistgen.exportm3u(hostport, header=config.m3uheadertemplate, add_ts=add_ts, fmt=self.getparam('fmt')).encode('utf-8')
 
         connection.send_response(200)
         connection.send_header('Content-Type', 'audio/mpegurl; charset=utf-8')

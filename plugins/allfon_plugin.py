@@ -3,8 +3,10 @@
 Allfon.tv Playlist Downloader Plugin
 http://ip:port/allfon
 '''
+
+__author__ = 'miltador, Dorik1972'
+
 import logging, re
-from urlparse import parse_qs
 import requests
 import time
 from PluginInterface import AceProxyPlugin
@@ -23,11 +25,9 @@ class Allfon(AceProxyPlugin):
     def __init__(self, AceConfig, AceStuff): pass
 
     def downloadPlaylist(self):
-        headers = {'User-Agent': 'Magic Browser', 'Accept-Encoding': 'gzip,deflate', 'Connection': 'close'}
-        proxies = {}; timeout = 5
-        if config.useproxy: proxies = config.proxies; timeout = 30
+        headers = {'User-Agent': 'Magic Browser'}
         try:
-            Allfon.playlist = requests.get(config.url, headers=headers, proxies=proxies, timeout=timeout).text.encode('UTF-8')
+            Allfon.playlist = requests.get(config.url, headers=headers, proxies=config.proxies, timeout=30).text.encode('UTF-8')
             Allfon.logger.debug('AllFon playlist %s downloaded !' % config.url)
             Allfon.playlisttime = int(time.time())
         except requests.exceptions.ConnectionError:
@@ -52,15 +52,16 @@ class Allfon(AceProxyPlugin):
         add_ts = True if connection.path.endswith('/ts') else False
         playlistgen = PlaylistGenerator(m3uchanneltemplate=config.m3uchanneltemplate)
 
+        Allfon.logger.debug('Generating requested m3u playlist')
+
         pattern = re.compile(r',(?P<name>\S.+)[\r\n].+[\r\n].+[\r\n](?P<url>[^\r\n]+)?')
         for match in pattern.finditer(Allfon.playlist, re.MULTILINE): playlistgen.addItem(match.groupdict())
 
-        Allfon.logger.info('AllFon playlist created')
-        params = parse_qs(connection.query)
+        Allfon.logger.debug('Exporting m3u playlist')
+        params = { k:[v] for k,v in (requests.compat.unquote(x).split('=') for x in [s2 for s1 in connection.query.split('&') for s2 in s1.split(';')] if '=' in x) }
         fmt = params['fmt'][0] if 'fmt' in params else None
-        header = '#EXTM3U url-tvg="%s" tvg-shift=%d deinterlace=1 m3uautoload=1 cache=1000\n' %(config.tvgurl, config.tvgshift)
 
-        exported = playlistgen.exportm3u(hostport, header=header, add_ts=add_ts, fmt=fmt)
+        exported = playlistgen.exportm3u(hostport, header=config.m3uheadertemplate, add_ts=add_ts, fmt=fmt)
 
         connection.send_response(200)
         connection.send_header('Content-Type', 'audio/mpegurl; charset=utf-8')

@@ -2,6 +2,8 @@
 '''
 Simple Client Counter for VLC VLM
 '''
+__author__ = 'ValdikSS, AndreyPavlenko, Dorik1972'
+
 import gevent
 import threading
 import logging
@@ -106,12 +108,11 @@ class ClientCounter(object):
     def destroyIdle(self):
         with self.lock:
             try:
-                if self.idleace:
-                    self.idleace.destroy()
+                if self.idleace: self.idleace.destroy()
             finally: self.idleace = None
 
     def checkIdle(self):
-        while(True):
+        while 1:
             gevent.sleep(60.0)
             with self.lock:
                 ace = self.idleace

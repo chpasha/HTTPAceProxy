@@ -46,10 +46,8 @@ import aceconfig
 from aceconfig import AceConfig
 
 
-class TimeoutException(Exception):
-    '''
-    Exception from AceClient
-    '''
+class ReadDataTimeoutError(Exception):
+    """Base class for exceptions in this module."""
     pass
 
 class ThreadPoolMixIn(SocketServer.ThreadingMixIn):
@@ -221,19 +219,22 @@ class HTTPHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                 logger.warning('Broadcast "%s" created' % self.client.channelName)
 
         except aceclient.AceException as e: self.dieWithError(500, 'AceClient exception: %s' % repr(e))
-        except TimeoutException as e:
-            if AceConfig.acerestartondatatimeout:
-                logger.warning('Timeout receiving data, trying to restart')
-                self.handleRequest(headers_only, channelName, channelIcon, fmt)
-            else:
-                self.dieWithError(500, 'Timeout exception: %s' % repr(e))
         except Exception as e: self.dieWithError(500, 'Unkonwn exception: %s' % repr(e))
         else:
             if not fmt: fmt = self.reqparams.get('fmt')[0] if 'fmt' in self.reqparams else None
             # streaming to client
             logger.info('Streaming "%s" to %s started' % (self.client.channelName, self.clientip))
-            self.client.handle(fmt)
-            logger.info('Streaming "%s" to %s finished' % (self.client.channelName, self.clientip))
+            try:
+                self.client.handle(fmt)
+            except ReadDataTimeoutError as te:
+                logger.warning('Timeout exception received, checking restart policy')
+                if AceConfig.acerestartondatatimeout:
+                    logger.warning('Timeout receiving data, trying to restart')
+                    self.handleRequest(headers_only, channelName, channelIcon, fmt)
+                else:
+                    self.dieWithError(500, 'Timeout exception: %s' % repr(te))
+            finally:
+                logger.info('Streaming "%s" to %s finished' % (self.client.channelName, self.clientip))
         finally:
             if AceStuff.clientcounter.delete(CID, self.client) == 0:
                  logger.warning('Broadcast "%s" stoped. Last client disconnected' % self.client.channelName)
@@ -326,7 +327,7 @@ class Client:
                     except: break
                 except gevent.queue.Empty:
                     logger.warning('No data received in %s seconds - disconnecting "%s"' % (AceConfig.acereaddatatimeout, self.channelName))
-                    raise TimeoutException('No data received within %s seconds' % AceConfig.acereaddatatimeout)
+                    raise ReadDataTimeoutError
         finally:
             if transcoder is not None:
                try: transcoder.kill(); logger.warning('Ffmpeg transcoding stoped')

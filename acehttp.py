@@ -18,9 +18,7 @@ import traceback
 
 import gevent
 # Monkeypatching and all the stuff
-from gevent import monkey;
-
-monkey.patch_all()
+from gevent import monkey; monkey.patch_all()
 from gevent.subprocess import Popen, PIPE
 import gevent.queue
 
@@ -46,6 +44,7 @@ import aceclient
 from aceclient.clientcounter import ClientCounter
 import aceconfig
 
+from aceconfig import AceConfig
 
 class ReadDataTimeoutError(Exception):
     """Base class for exceptions in this module."""

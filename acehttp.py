@@ -15,13 +15,17 @@ psutil >= 5.3.0
 __author__ = 'ValdikSS, AndreyPavlenko, Dorik1972'
 
 import traceback
+
 import gevent
 # Monkeypatching and all the stuff
-from gevent import monkey; monkey.patch_all()
+from gevent import monkey;
+
+monkey.patch_all()
 from gevent.subprocess import Popen, PIPE
 import gevent.queue
 
 import os, sys, glob
+
 # Uppend the directory for custom modules at the front of the path.
 base_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(base_dir, 'modules'))
@@ -34,42 +38,41 @@ import time
 import requests
 from ipaddr import IPNetwork, IPAddress
 from socket import error as SocketException
-from socket import socket, AF_INET, SOCK_DGRAM
 from base64 import b64encode
 import BaseHTTPServer, SocketServer
-from modules.PluginInterface import AceProxyPlugin
 from concurrent.futures import ThreadPoolExecutor
 
 import aceclient
 from aceclient.clientcounter import ClientCounter
 import aceconfig
-from aceconfig import AceConfig
 
 
 class ReadDataTimeoutError(Exception):
     """Base class for exceptions in this module."""
     pass
 
-class ThreadPoolMixIn(SocketServer.ThreadingMixIn):
 
+class ThreadPoolMixIn(SocketServer.ThreadingMixIn):
     allow_reuse_address = daemon_threads = True
 
     def process_request_thread(self, request, client_address):
         try:
             self.finish_request(request, client_address)
             self.close_request(request)
-        except SocketException: pass
+        except SocketException:
+            pass
         except Exception:
             self.handle_error(request, client_address)
             self.close_request(request)
 
     def process_request(self, request, client_address):
-        checkAce() # Check is AceStream engine alive
+        checkAce()  # Check is AceStream engine alive
         self.pool.submit(self.process_request_thread, request, client_address)
 
     def handle_error(self, request, client_address):
         logging.debug(traceback.format_exc())
         pass
+
 
 class ThreadedPoolHTTPServer(ThreadPoolMixIn, BaseHTTPServer.HTTPServer):
     """
@@ -78,12 +81,17 @@ class ThreadedPoolHTTPServer(ThreadPoolMixIn, BaseHTTPServer.HTTPServer):
     # default threads value if max_workers=None - cpu_num() * 5 for custom value max_workers=N
     pool = ThreadPoolExecutor(max_workers=AceConfig.maxconns, thread_name_prefix='PoolHTTPServerThread')
 
+
 class HTTPHandler(BaseHTTPServer.BaseHTTPRequestHandler):
 
-    def log_message(self, format, *args): pass
-        #logger.debug('%s - %s - "%s"' % (self.address_string(), format%args, requests.compat.unquote(self.path).decode('utf8')))
-    def log_request(self, code='-', size='-'): pass
-        #logger.debug('"%s" %s %s', requests.compat.unquote(self.requestline).decode('utf8'), str(code), str(size))
+    def log_message(self, format, *args):
+        pass
+
+    # logger.debug('%s - %s - "%s"' % (self.address_string(), format%args, requests.compat.unquote(self.path).decode('utf8')))
+    def log_request(self, code='-', size='-'):
+        pass
+
+    # logger.debug('"%s" %s %s', requests.compat.unquote(self.requestline).decode('utf8'), str(code), str(size))
 
     def dieWithError(self, errorcode=500, logmsg='Dying with error', loglevel=logging.ERROR):
         '''
@@ -94,9 +102,11 @@ class HTTPHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             try:
                 self.send_error(errorcode)
                 self.end_headers()
-            except: pass
+            except:
+                pass
 
-    def do_HEAD(self): return self.do_GET(headers_only=True)
+    def do_HEAD(self):
+        return self.do_GET(headers_only=True)
 
     def do_GET(self, headers_only=False):
         '''
@@ -115,8 +125,8 @@ class HTTPHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         self.path = self.requrl.path[:-1] if self.requrl.path.endswith('/') else self.requrl.path
         # If firewall enabled
         if AceConfig.firewall and not checkFirewall(self.clientip):
-           self.dieWithError(403, 'Dropping connection from %s due to firewall rules' % self.clientip, logging.ERROR)  # 403 Forbidden
-           return
+            self.dieWithError(403, 'Dropping connection from %s due to firewall rules' % self.clientip, logging.ERROR)  # 403 Forbidden
+            return
 
         try:
             self.splittedpath = self.path.split('/')
@@ -136,17 +146,19 @@ class HTTPHandler(BaseHTTPServer.BaseHTTPRequestHandler):
 
         # Handle request with plugin handler
         if self.reqtype in AceStuff.pluginshandlers:
-            try: AceStuff.pluginshandlers.get(self.reqtype).handle(self, headers_only)
+            try:
+                AceStuff.pluginshandlers.get(self.reqtype).handle(self, headers_only)
             except Exception as e:
                 self.dieWithError(500, 'Plugin exception: %s' % repr(e))
                 logger.error(traceback.format_exc())
-            finally: return
+            finally:
+                return
         self.handleRequest(headers_only)
 
     def handleRequest(self, headers_only, channelName=None, channelIcon=None, fmt=None):
         logger = logging.getLogger('HandleRequest')
         self.requrl = requests.compat.urlparse(self.path)
-        self.reqparams = { k:[v] for k,v in (requests.compat.unquote(x).split('=') for x in [s2 for s1 in self.query.split('&') for s2 in s1.split(';')] if '=' in x) }
+        self.reqparams = {k: [v] for k, v in (requests.compat.unquote(x).split('=') for x in [s2 for s1 in self.query.split('&') for s2 in s1.split(';')] if '=' in x)}
         self.path = self.requrl.path[:-1] if self.requrl.path.endswith('/') else self.requrl.path
         self.videoextdefaults = ('.3gp', '.aac', '.ape', '.asf', '.avi', '.dv', '.divx', '.flac', '.flc', '.flv', '.m2ts', '.m4a', '.mka', '.mkv',
                                  '.mpeg', '.mpeg4', '.mpegts', '.mpg4', '.mp3', '.mp4', '.mpg', '.mov', '.m4v', '.ogg', '.ogm', '.ogv', '.oga',
@@ -154,8 +166,8 @@ class HTTPHandler(BaseHTTPServer.BaseHTTPRequestHandler):
 
         # If firewall enabled
         if AceConfig.firewall and not checkFirewall(self.clientip):
-           self.dieWithError(403, 'Dropping connection from %s due to firewall rules' % self.clientip, logging.ERROR)  # 403 Forbidden
-           return
+            self.dieWithError(403, 'Dropping connection from %s due to firewall rules' % self.clientip, logging.ERROR)  # 403 Forbidden
+            return
 
         # Check if third parameter exists…/self.reqtype/blablablablabla/video.mpg
         #                                                     |_________|
@@ -164,7 +176,8 @@ class HTTPHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             if not self.path.endswith(self.videoextdefaults):
                 self.dieWithError(400, 'Request seems like valid but no valid video extension was provided', logging.ERROR)
                 return
-        except IndexError: self.dieWithError(400, 'Bad Request', logging.WARNING); return  # 400 Bad Request
+        except IndexError:
+            self.dieWithError(400, 'Bad Request', logging.WARNING); return  # 400 Bad Request
 
         # Limit concurrent connections
         if 0 < AceConfig.maxconns <= AceStuff.clientcounter.total:
@@ -174,8 +187,10 @@ class HTTPHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         # Pretend to work fine with Fake or HEAD request.
         if headers_only or AceConfig.isFakeRequest(self.path, self.reqparams, self.headers):
             # Return 200 and exit
-            if headers_only: logger.debug('Sending headers and closing connection')
-            else: logger.debug('Fake request - closing connection')
+            if headers_only:
+                logger.debug('Sending headers and closing connection')
+            else:
+                logger.debug('Fake request - closing connection')
             self.send_response(200)
             self.send_header('Content-Type', 'video/mpeg')
             self.send_header('Connection', 'Close')
@@ -186,22 +201,24 @@ class HTTPHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         # [file_indexes, developer_id, affiliate_id, zone_id, stream_id]
         paramsdict = {}.fromkeys(aceclient.acemessages.AceConst.START_PARAMS, '0')
         for i in range(3, len(self.splittedpath)):
-            paramsdict[aceclient.acemessages.AceConst.START_PARAMS[i-3]] = self.splittedpath[i] if self.splittedpath[i].isdigit() else '0'
-        paramsdict[self.reqtype] = requests.compat.unquote(self.splittedpath[2]) #self.path_unquoted
-        #End parameters dict
+            paramsdict[aceclient.acemessages.AceConst.START_PARAMS[i - 3]] = self.splittedpath[i] if self.splittedpath[i].isdigit() else '0'
+        paramsdict[self.reqtype] = requests.compat.unquote(self.splittedpath[2])  # self.path_unquoted
+        # End parameters dict
 
         content_id = self.getCID(self.reqtype, paramsdict[self.reqtype])
         CID = content_id if content_id else paramsdict[self.reqtype]
         if not channelName and self.reqtype in ('content_id', 'url', 'infohash'):
-           try:
-               url = 'http://%s:%s/server/api' % (AceConfig.acehost, AceConfig.aceHTTPport)
-               headers = {'User-Agent': 'Magic Browser'}
-               params = {'method': 'get_media_files', self.reqtype: paramsdict[self.reqtype]}
-               channelName = requests.get(url, headers=headers, params=params, timeout=5).json()['result'][paramsdict['file_indexes']]
-           except: channelName = CID
+            try:
+                url = 'http://%s:%s/server/api' % (AceConfig.acehost, AceConfig.aceHTTPport)
+                headers = {'User-Agent': 'Magic Browser'}
+                params = {'method': 'get_media_files', self.reqtype: paramsdict[self.reqtype]}
+                channelName = requests.get(url, headers=headers, params=params, timeout=5).json()['result'][paramsdict['file_indexes']]
+            except:
+                channelName = CID
         if not channelIcon: channelIcon = 'http://static.acestream.net/sites/acestream/img/ACE-logo.png'
         # Create client
         self.client = Client(CID, self, channelName, channelIcon)
+        restartondatareadtimeout = False
         try:
             # If there is no existing broadcast we create it
             if AceStuff.clientcounter.add(CID, self.client) == 1:
@@ -209,56 +226,61 @@ class HTTPHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                 # Send START commands to AceEngine
                 self.client.ace.START(self.reqtype, paramsdict, AceConfig.streamtype)
                 # Getting URL from engine
-                self.url = self.client.ace.getUrl(AceConfig.videotimeout*2) if self.reqtype in ('infohash', 'url', 'data') else self.client.ace.getUrl(AceConfig.videotimeout)
+                self.url = self.client.ace.getUrl(AceConfig.videotimeout * 2) if self.reqtype in ('infohash', 'url', 'data') else self.client.ace.getUrl(AceConfig.videotimeout)
                 # Rewriting host:port for remote Ace Stream Engine
-                p = requests.compat.urlparse(self.url)._replace(netloc=AceConfig.acehost+':'+str(AceConfig.aceHTTPport))
+                p = requests.compat.urlparse(self.url)._replace(netloc=AceConfig.acehost + ':' + str(AceConfig.aceHTTPport))
                 self.url = requests.compat.urlunparse(p)
                 # Start streamreader for broadcast
                 gevent.spawn(self.client.ace.startStreamReader, self.url, CID, AceStuff.clientcounter, self.headers.dict)
                 gevent.sleep()
                 logger.warning('Broadcast "%s" created' % self.client.channelName)
 
-        except aceclient.AceException as e: self.dieWithError(500, 'AceClient exception: %s' % repr(e))
-        except Exception as e: self.dieWithError(500, 'Unkonwn exception: %s' % repr(e))
-        else:
             if not fmt: fmt = self.reqparams.get('fmt')[0] if 'fmt' in self.reqparams else None
-            # streaming to client
             logger.info('Streaming "%s" to %s started' % (self.client.channelName, self.clientip))
-            try:
-                self.client.handle(fmt)
-            except ReadDataTimeoutError as te:
-                logger.warning('Timeout exception received, checking restart policy')
-                if AceConfig.acerestartondatatimeout:
-                    logger.warning('Timeout receiving data, trying to restart')
-                    self.handleRequest(headers_only, channelName, channelIcon, fmt)
-                else:
-                    self.dieWithError(500, 'Timeout exception: %s' % repr(te))
-            finally:
-                logger.info('Streaming "%s" to %s finished' % (self.client.channelName, self.clientip))
+            self.client.handle(fmt)
+            logger.info('Streaming "%s" to %s finished' % (self.client.channelName, self.clientip))
+
+        except aceclient.AceException as e:
+            self.dieWithError(500, 'AceClient exception: %s' % repr(e))
+        except ReadDataTimeoutError as te:
+            logger.warning('Timeout exception received, checking restart policy')
+            if AceConfig.acerestartondatatimeout:
+                logger.warning('Timeout receiving data, scheduling restart')
+                restartondatareadtimeout = True
+            else:
+                self.dieWithError(500, 'Read Timeout exception: %s' % repr(te))
+        except Exception as e:
+            self.dieWithError(500, 'Unkonwn exception: %s' % repr(e))
+
         finally:
             if AceStuff.clientcounter.delete(CID, self.client) == 0:
-                 logger.warning('Broadcast "%s" stoped. Last client disconnected' % self.client.channelName)
+                logger.warning('Broadcast "%s" stoped. Last client disconnected' % self.client.channelName)
             self.client.destroy()
+            if restartondatareadtimeout:
+                self.handleRequest(headers_only, channelName, channelIcon, fmt)
             return
 
     def getCID(self, reqtype, url):
         cid = None
         if reqtype == 'url' and url.endswith(('.acelive', '.acestream', '.acemedia', '.torrent')):
             try:
-                headers={'User-Agent': 'VLC/2.0.5 LibVLC/2.0.5', 'Range': 'bytes=0-', 'Connection': 'close', 'Icy-MetaData': '1'}
-                with requests.get(url, headers=headers, stream = True, timeout=5) as r:
-                   headers={'User-Agent': 'Python-urllib/2.7', 'Content-Type': 'application/octet-stream', 'Connection': 'close'}
-                   cid = requests.post('http://api.torrentstream.net/upload/raw', data=b64encode(r.raw.read()), headers=headers, timeout=5).json()['content_id']
-            except: pass
+                headers = {'User-Agent': 'VLC/2.0.5 LibVLC/2.0.5', 'Range': 'bytes=0-', 'Connection': 'close', 'Icy-MetaData': '1'}
+                with requests.get(url, headers=headers, stream=True, timeout=5) as r:
+                    headers = {'User-Agent': 'Python-urllib/2.7', 'Content-Type': 'application/octet-stream', 'Connection': 'close'}
+                    cid = requests.post('http://api.torrentstream.net/upload/raw', data=b64encode(r.raw.read()), headers=headers, timeout=5).json()['content_id']
+            except:
+                pass
             if cid is None:
                 logging.debug("Failed to get ContentID from WEB API")
                 try:
                     with AceStuff.clientcounter.lock:
                         if not AceStuff.clientcounter.idleace: AceStuff.clientcounter.idleace = AceStuff.clientcounter.createAce()
                         cid = AceStuff.clientcounter.idleace.GETCID(reqtype, url)
-                except: logging.error("Failed to get ContentID from engine")
+                except:
+                    logging.error("Failed to get ContentID from engine")
 
         return None if not cid else cid
+
 
 class Client:
 
@@ -279,7 +301,8 @@ class Client:
             start = time.time()
             while self.handler.connection and self.ace._streamReaderState == 1:
                 remaining = start + 5.0 - time.time()
-                if remaining > 0: self.ace._lock.wait(remaining)
+                if remaining > 0:
+                    self.ace._lock.wait(remaining)
                 else:
                     self.handler.dieWithError(500, 'Video stream not opened in 5 seconds - disconnecting')
                     return
@@ -293,10 +316,10 @@ class Client:
             FORWARD_HEADERS = ['Connection', 'Keep-Alive', 'Content-Range', 'Content-Type', 'X-Content-Duration', 'Content-Length']
             SKIP_HEADERS = ['Server', 'Date', 'Transfer-Encoding', 'Accept-Ranges']
 
-            new_headers = {k:v for (k, v) in list(self.ace._streamReaderConnection.headers.items()) if k not in (FORWARD_HEADERS + SKIP_HEADERS)}
+            new_headers = {k: v for (k, v) in list(self.ace._streamReaderConnection.headers.items()) if k not in (FORWARD_HEADERS + SKIP_HEADERS)}
             if new_headers: logger.error('NEW HEADERS FOUND: %s' % new_headers)
 
-            response_headers = {k:v for (k, v) in list(self.ace._streamReaderConnection.headers.items()) if k not in SKIP_HEADERS}
+            response_headers = {k: v for (k, v) in list(self.ace._streamReaderConnection.headers.items()) if k not in SKIP_HEADERS}
             for h in response_headers: self.handler.send_header(h, response_headers[h])
             self.handler.end_headers()
             logger.debug('Sending HTTPAceProxy headers to client: %s' % response_headers)
@@ -307,11 +330,11 @@ class Client:
         if AceConfig.transcode and fmt and AceConfig.osplatform != 'Windows':
             if fmt in AceConfig.transcodecmd:
                 stderr = None if AceConfig.loglevel == logging.DEBUG else DEVNULL
-                popen_params = { "bufsize": AceConfig.readchunksize,
-                                 "stdin"  : PIPE,
-                                 "stdout" : self.handler.wfile,
-                                 "stderr" : stderr,
-                                 "shell"  : False }
+                popen_params = {"bufsize": AceConfig.readchunksize,
+                                "stdin": PIPE,
+                                "stdout": self.handler.wfile,
+                                "stderr": stderr,
+                                "shell": False}
 
                 transcoder = Popen(AceConfig.transcodecmd[fmt], **popen_params)
                 gevent.sleep()
@@ -323,27 +346,36 @@ class Client:
             while self.handler.connection and self.ace._streamReaderState == 2:
                 try:
                     data = self.queue.get(timeout=AceConfig.acereaddatatimeout)
-                    try: out.write(data)
-                    except: break
+                    try:
+                        out.write(data)
+                    except:
+                        break
                 except gevent.queue.Empty:
                     logger.warning('No data received in %s seconds - disconnecting "%s"' % (AceConfig.acereaddatatimeout, self.channelName))
-                    raise ReadDataTimeoutError
+                    raise ReadDataTimeoutError('No data received within timeout')
         finally:
             if transcoder is not None:
-               try: transcoder.kill(); logger.warning('Ffmpeg transcoding stoped')
-               except: pass
-            return
+                try:
+                    transcoder.kill(); logger.warning('Ffmpeg transcoding stoped')
+                except:
+                    pass
 
-    def destroy(self): self.queue.queue.clear()
+    def destroy(self):
+        self.queue.queue.clear()
+
 
 class AceStuff(object):
     '''
     Inter-class interaction class
     '''
+
+
 # taken from http://stackoverflow.com/questions/2699907/dropping-root-permissions-in-python
 def drop_privileges(uid_name='nobody', gid_name='nogroup'):
-    try: import pwd, grp
-    except ImportError: return False # Windows
+    try:
+        import pwd, grp
+    except ImportError:
+        return False  # Windows
 
     # Get the uid/gid from the name
     running_uid = pwd.getpwnam(uid_name).pw_uid
@@ -367,13 +399,16 @@ def drop_privileges(uid_name='nobody', gid_name='nogroup'):
         return True
     return False
 
+
 # Spawning procedures
 def spawnAce(cmd, delay=0.1):
     if AceConfig.osplatform == 'Windows':
         import _winreg
         reg = _winreg.ConnectRegistry(None, _winreg.HKEY_CURRENT_USER)
-        try: key = _winreg.OpenKey(reg, 'Software\AceStream')
-        except: logger.error("Can't find acestream!"); sys.exit(1)
+        try:
+            key = _winreg.OpenKey(reg, 'Software\AceStream')
+        except:
+            logger.error("Can't find acestream!"); sys.exit(1)
         else:
             engine = _winreg.QueryValueEx(key, 'EnginePath')
             AceStuff.acedir = os.path.dirname(engine[0])
@@ -382,13 +417,18 @@ def spawnAce(cmd, delay=0.1):
         AceStuff.ace = psutil.Popen(cmd, stdout=DEVNULL, stderr=DEVNULL)
         gevent.sleep(delay)
         return True
-    except: return False
+    except:
+        return False
+
 
 def checkFirewall(clientip):
-    try: clientinrange = any([IPAddress(clientip) in IPNetwork(i) for i in AceConfig.firewallnetranges])
-    except: logger.error('Check firewall netranges settings !'); return False
+    try:
+        clientinrange = any([IPAddress(clientip) in IPNetwork(i) for i in AceConfig.firewallnetranges])
+    except:
+        logger.error('Check firewall netranges settings !'); return False
     if (AceConfig.firewallblacklistmode and clientinrange) or (not AceConfig.firewallblacklistmode and not clientinrange): return False
     return True
+
 
 def checkAce():
     if AceConfig.acespawn and not isRunning(AceStuff.ace):
@@ -401,18 +441,23 @@ def checkAce():
         else:
             logger.error("Can't spawn Ace Stream!")
 
+
 def detectPort():
     try:
         if not isRunning(AceStuff.ace):
             logger.error("Couldn't detect port! Ace Engine is not running?")
-            clean_proc(); sys.exit(1)
+            clean_proc();
+            sys.exit(1)
     except AttributeError:
         logger.error("Ace Engine is not running!")
-        clean_proc(); sys.exit(1)
+        clean_proc();
+        sys.exit(1)
     import _winreg
     reg = _winreg.ConnectRegistry(None, _winreg.HKEY_CURRENT_USER)
-    try: key = _winreg.OpenKey(reg, 'Software\AceStream')
-    except: logger.error("Can't find AceStream!"); sys.exit(1)
+    try:
+        key = _winreg.OpenKey(reg, 'Software\AceStream')
+    except:
+        logger.error("Can't find AceStream!"); sys.exit(1)
     else:
         engine = _winreg.QueryValueEx(key, 'EnginePath')
         AceStuff.acedir = os.path.dirname(engine[0])
@@ -421,19 +466,25 @@ def detectPort():
             logger.info("Detected ace port: %s" % AceConfig.acehostslist[0][1])
         except IOError:
             logger.error("Couldn't detect port! acestream.port file doesn't exist?")
-            clean_proc(); sys.exit(1)
+            clean_proc();
+            sys.exit(1)
+
 
 def isRunning(process):
     return True if process.is_running() and process.status() != psutil.STATUS_ZOMBIE else False
+
 
 def findProcess(name):
     for proc in psutil.process_iter():
         try:
             pinfo = proc.as_dict(attrs=['pid', 'name'])
             if name in pinfo['name']: return pinfo['pid']
-        except psutil.AccessDenied: pass # System process pass
-        except psutil.NoSuchProcess: pass # # Process terminated
+        except psutil.AccessDenied:
+            pass  # System process pass
+        except psutil.NoSuchProcess:
+            pass  # # Process terminated
     return None
+
 
 def clean_proc():
     # Trying to close all spawned processes gracefully
@@ -445,8 +496,11 @@ def clean_proc():
             if proc.name() == name: proc.terminate(); gevent.sleep(1)
         # for windows, subprocess.terminate() is just an alias for kill(), so we have to delete the acestream port file manually
         if AceConfig.osplatform == 'Windows' and os.path.isfile(AceStuff.acedir + '\\acestream.port'):
-            try: os.remove(AceStuff.acedir + '\\acestream.port')
-            except: pass
+            try:
+                os.remove(AceStuff.acedir + '\\acestream.port')
+            except:
+                pass
+
 
 # This is what we call to stop the server completely
 def shutdown(signum=0, frame=0):
@@ -460,6 +514,7 @@ def shutdown(signum=0, frame=0):
     logger.info('Bye Bye .....')
     sys.exit()
 
+
 def _reloadconfig(signum=None, frame=None):
     '''
     Reload configuration file.
@@ -469,8 +524,8 @@ def _reloadconfig(signum=None, frame=None):
 
     logger = logging.getLogger('reloadconfig')
     reload(aceconfig)
-    from aceconfig import AceConfig
     logger.info('Ace Stream HTTP Proxy config reloaded')
+
 
 logging.basicConfig(level=AceConfig.loglevel, filename=AceConfig.logfile, format=AceConfig.logfmt, datefmt=AceConfig.logdatefmt)
 logger = logging.getLogger('HTTPServer')
@@ -498,7 +553,8 @@ if AceConfig.osplatform != 'Windows' and AceConfig.aceproxyuser and os.getuid() 
 try:
     gevent.signal(signal.SIGHUP, _reloadconfig)
     gevent.signal(signal.SIGTERM, shutdown)
-except AttributeError: pass  # not available on Windows
+except AttributeError:
+    pass  # not available on Windows
 
 # Creating ClientCounter
 AceStuff.clientcounter = ClientCounter()
@@ -507,38 +563,41 @@ AceStuff.clientcounter = ClientCounter()
 name = 'ace_engine.exe' if AceConfig.osplatform == 'Windows' else os.path.basename(AceConfig.acecmd)
 ace_pid = findProcess(name)
 if not ace_pid and AceConfig.acespawn:
-   AceStuff.aceProc = '' if AceConfig.osplatform == 'Windows' else AceConfig.acecmd.split()
-   if spawnAce(AceStuff.aceProc, AceConfig.acestartuptimeout):
-       ace_pid = AceStuff.ace.pid
-       AceStuff.ace = psutil.Process(ace_pid)
-       AceConfig.acehostslist[0][0] = AceConfig.httphost
-       AceConfig.acehost, AceConfig.aceHTTPport = AceConfig.acehostslist[0][0], AceConfig.acehostslist[0][2]
-       logger.info('Ace Stream engine spawned with pid %s' % AceStuff.ace.pid)
+    AceStuff.aceProc = '' if AceConfig.osplatform == 'Windows' else AceConfig.acecmd.split()
+    if spawnAce(AceStuff.aceProc, AceConfig.acestartuptimeout):
+        ace_pid = AceStuff.ace.pid
+        AceStuff.ace = psutil.Process(ace_pid)
+        AceConfig.acehostslist[0][0] = AceConfig.httphost
+        AceConfig.acehost, AceConfig.aceHTTPport = AceConfig.acehostslist[0][0], AceConfig.acehostslist[0][2]
+        logger.info('Ace Stream engine spawned with pid %s' % AceStuff.ace.pid)
 elif ace_pid:
-   logger.info('Local Ace Stream engine found with pid %s' % ace_pid)
-   AceStuff.ace = psutil.Process(ace_pid)
-   AceConfig.acehostslist[0][0] = AceConfig.httphost
-   AceConfig.acehost, AceConfig.aceHTTPport = AceConfig.acehostslist[0][0], AceConfig.acehostslist[0][2]
-   AceConfig.acespawn = False
+    logger.info('Local Ace Stream engine found with pid %s' % ace_pid)
+    AceStuff.ace = psutil.Process(ace_pid)
+    AceConfig.acehostslist[0][0] = AceConfig.httphost
+    AceConfig.acehost, AceConfig.aceHTTPport = AceConfig.acehostslist[0][0], AceConfig.acehostslist[0][2]
+    AceConfig.acespawn = False
 else:
-   Engine_found = False
-   for engine in AceConfig.acehostslist:
-     try:
-          if requests.get('http://%s:%s' % (engine[0],engine[2]), timeout=5).status_code in (200, 500):
-             logger.info('Remote Ace Stream engine found on %s:%s' % (engine[0],engine[2]))
-             AceConfig.acehost, AceConfig.aceHTTPport = engine[0], engine[2]
-             Engine_found = True
-             break
-     except requests.exceptions.ConnectionError: pass
-   if not Engine_found: logger.error('Not found any Ace Stream engine!')
+    Engine_found = False
+    for engine in AceConfig.acehostslist:
+        try:
+            if requests.get('http://%s:%s' % (engine[0], engine[2]), timeout=5).status_code in (200, 500):
+                logger.info('Remote Ace Stream engine found on %s:%s' % (engine[0], engine[2]))
+                AceConfig.acehost, AceConfig.aceHTTPport = engine[0], engine[2]
+                Engine_found = True
+                break
+        except requests.exceptions.ConnectionError:
+            pass
+    if not Engine_found: logger.error('Not found any Ace Stream engine!')
 
 # Refreshes the acestream.port file .....
 if ace_pid and AceConfig.osplatform == 'Windows': detectPort()
 
 # Loading plugins
 # Trying to change dir (would fail in freezed state)
-try: os.chdir(os.path.dirname(os.path.realpath(__file__)))
-except: pass
+try:
+    os.chdir(os.path.dirname(os.path.realpath(__file__)))
+except:
+    pass
 # Creating dict of handlers
 AceStuff.pluginshandlers = {}
 # And a list with plugin instances
@@ -548,7 +607,8 @@ logger.info("Load Ace Stream HTTP Proxy plugins .....")
 for i in [os.path.splitext(os.path.basename(x))[0] for x in glob.glob('plugins/*_plugin.py')]:
     plugin = __import__(i)
     plugname = i.split('_')[0].capitalize()
-    try: plugininstance = getattr(plugin, plugname)(AceConfig, AceStuff)
+    try:
+        plugininstance = getattr(plugin, plugname)(AceConfig, AceStuff)
     except Exception as e:
         logger.error("Cannot load plugin %s: %s" % (plugname, repr(e)))
         continue
@@ -559,5 +619,7 @@ for i in [os.path.splitext(os.path.basename(x))[0] for x in glob.glob('plugins/*
 # Start complite. Wating for requests
 server = ThreadedPoolHTTPServer((AceConfig.httphost, AceConfig.httpport), HTTPHandler)
 logger.info('Server started at %s:%s Use <Ctrl-C> to stop' % (AceConfig.httphost, AceConfig.httpport))
-try: server.serve_forever()
-except (KeyboardInterrupt, SystemExit): shutdown()
+try:
+    server.serve_forever()
+except (KeyboardInterrupt, SystemExit):
+    shutdown()

@@ -45,6 +45,13 @@ from aceclient.clientcounter import ClientCounter
 import aceconfig
 from aceconfig import AceConfig
 
+
+class TimeoutException(Exception):
+    '''
+    Exception from AceClient
+    '''
+    pass
+
 class ThreadPoolMixIn(SocketServer.ThreadingMixIn):
 
     allow_reuse_address = daemon_threads = True
@@ -214,6 +221,12 @@ class HTTPHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                 logger.warning('Broadcast "%s" created' % self.client.channelName)
 
         except aceclient.AceException as e: self.dieWithError(500, 'AceClient exception: %s' % repr(e))
+        except TimeoutException as e:
+            if AceConfig.acerestartondatatimeout:
+                logger.warning('Timeout receiving data, trying to restart')
+                self.handleRequest(headers_only, channelName, channelIcon, fmt)
+            else:
+                self.dieWithError(500, 'Timeout exception: %s' % repr(e))
         except Exception as e: self.dieWithError(500, 'Unkonwn exception: %s' % repr(e))
         else:
             if not fmt: fmt = self.reqparams.get('fmt')[0] if 'fmt' in self.reqparams else None
@@ -308,10 +321,12 @@ class Client:
         try:
             while self.handler.connection and self.ace._streamReaderState == 2:
                 try:
-                    data = self.queue.get(timeout=60)
+                    data = self.queue.get(timeout=AceConfig.acereaddatatimeout)
                     try: out.write(data)
                     except: break
-                except gevent.queue.Empty: logger.warning('No data received in 60 seconds - disconnecting "%s"' % self.channelName); break
+                except gevent.queue.Empty:
+                    logger.warning('No data received in %s seconds - disconnecting "%s"' % (AceConfig.acereaddatatimeout, self.channelName))
+                    raise TimeoutException('No data received within %s seconds' % AceConfig.acereaddatatimeout)
         finally:
             if transcoder is not None:
                try: transcoder.kill(); logger.warning('Ffmpeg transcoding stoped')

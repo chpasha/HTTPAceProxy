@@ -22,6 +22,8 @@ class AceDefConfig(object):
     acestartuptimeout = 10
     aceconntimeout = 5
     aceresulttimeout = 5
+    acereaddatatimeout = 60
+    acerestartondatatimeout = False
     httphost='0.0.0.0'
     httpport = 8000
     readchunksize = 8192

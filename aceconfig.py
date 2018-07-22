@@ -42,7 +42,7 @@ class AceConfig(acedefconfig.AceDefConfig):
     # Ace Stream Engine authentication result & API port answers timeout
     aceresulttimeout = 10
     # Timeout for no data received
-    acereaddatatimeout = 10
+    acereaddatatimeout = 30
     # Restart if no data receive within timeout
     acerestartondatatimeout = True
     # Ace Stream Engine stream type hls or http

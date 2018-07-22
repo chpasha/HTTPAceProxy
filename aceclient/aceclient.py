@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 __author__ = 'ValdikSS, AndreyPavlenko, Dorik1972'
 
-from aceconfig import AceConfig
-from acemessages import *
+import traceback
 import gevent, gevent.queue
 from gevent.event import AsyncResult, Event
 from gevent.subprocess import Popen, PIPE
@@ -13,8 +12,10 @@ import requests
 import json
 import time
 import threading
-import traceback
 import random
+
+from aceconfig import AceConfig
+from acemessages import *
 
 class AceException(Exception):
     '''
@@ -70,7 +71,7 @@ class AceClient(object):
         self._streamReaderState = None
         self._lock = threading.Condition(threading.Lock())
         self._streamReaderQueue = gevent.queue.Queue(maxsize=AceConfig.readcachesize) # Ring buffer
-        self._engine_version_code = 0
+        self._engine_version_code = None
 
         # Logger
         logger = logging.getLogger('AceClientimport tracebacknt_init')
@@ -85,7 +86,7 @@ class AceClient(object):
                logger.debug('The are no alive AceStream on %s:%d' % (AceEngine[0], AceEngine[1]))
                pass
         # Spawning recvData greenlet
-        if self._socket: gevent.spawn(self._recvData); gevent.sleep()
+        if self._socket is not None: self.hanggreenlet = gevent.spawn(self._recvData); gevent.sleep()
         else: logger.error('The are no alive AceStream Engines found'); return
 
     def destroy(self):
@@ -94,7 +95,10 @@ class AceClient(object):
         '''
         logger = logging.getLogger('AceClient_destroy') # Logger
 
-        if self._shuttingDown.isSet(): return  # Already in the middle of destroying
+        if self._shuttingDown.isSet():   # Already in the middle of destroying
+            self._socket = None
+            self.hanggreenlet.kill()
+            return
 
         self._resumeevent.set() # We should resume video to prevent read greenlet deadlock
         self._urlresult.set()   # And to prevent getUrl deadlock
@@ -130,13 +134,13 @@ class AceClient(object):
         self._write(AceMessage.request.HELLO) # Sending HELLOBG
 
         if not self._authevent.wait(self._resulttimeout):
-            errmsg = 'Authentication timeout during AceEngine init. Wrong key?' # HELLOTS not resived from engine
+            errmsg = 'Authentication timeout during AceEngine init!' # HELLOTS not resived from engine or Wrong key!
             logger.error(errmsg)
             raise AceException(errmsg)
             return
 
-        if not self._auth:
-            errmsg = 'Authentication error during AceEngine init. Wrong key?'
+        if self._auth is None:
+            errmsg = 'User data error! Check "aceage" and "acesex" parameters in aceconfig.py!' # Error while sending USERDATA to engine
             logger.error(errmsg)
             raise AceException(errmsg)
             return
@@ -156,10 +160,8 @@ class AceClient(object):
         Start video method
         '''
         if stream_type == 'hls' and self._engine_version_code >= 3010500:
-           stream_type = 'output_format=hls' + ' transcode_audio=' + str(AceConfig.transcode_audio) \
-                                             + ' transcode_mp3=' + str(AceConfig.transcode_mp3) \
-                                             + ' transcode_ac3=' + str(AceConfig.transcode_ac3) \
-                                             + ' preferred_audio_language=' + AceConfig.preferred_audio_language
+           stream_type = 'output_format=hls transcode_audio=%s transcode_mp3=%s transcode_ac3=%s preferred_audio_language=%s' % \
+                         (AceConfig.transcode_audio, AceConfig.transcode_mp3, AceConfig.transcode_ac3, AceConfig.preferred_audio_language)
         else: stream_type = 'output_format=http'
 
         self._urlresult = AsyncResult()
@@ -210,60 +212,65 @@ class AceClient(object):
         if 'range' in req_headers: del req_headers['range']
         logger.debug('Get headers from client: %s' % req_headers)
 
-        with requests.get(url, headers=req_headers, stream=True, timeout=(5, None)) as self._streamReaderConnection:
-          try:
-              if self._streamReaderConnection.status_code  not in (200, 206):
-                logger.error('Failed to open video stream %s' % url)
-                return None
+        try:
+          self._streamReaderConnection = requests.get(url, headers=req_headers, stream=True, timeout=(5, 60))
+          self._streamReaderConnection.raise_for_status() # raise an exception for error codes (4xx or 5xx)
 
-              if url.endswith('.m3u8'):
-                  self._streamReaderConnection.headers = {'Content-Type': 'application/octet-stream', 'Connection': 'Keep-Alive', 'Keep-Alive': 'timeout=15, max=100'}
-                  popen_params = { "bufsize": AceConfig.readchunksize,
-                                   "stdout" : PIPE,
-                                   "stderr" : None,
-                                   "shell"  : False }
+          if url.endswith('.m3u8'):
+              self._streamReaderConnection.headers = {'Content-Type': 'application/octet-stream', 'Connection': 'Keep-Alive', 'Keep-Alive': 'timeout=15, max=100'}
+              popen_params = { "bufsize": AceConfig.readchunksize,
+                               "stdout" : PIPE,
+                               "stderr" : None,
+                               "shell"  : False }
 
-                  if AceConfig.osplatform == 'Windows':
-                       ffmpeg_cmd = 'ffmpeg.exe '
-                       CREATE_NO_WINDOW = 0x08000000
-                       CREATE_NEW_PROCESS_GROUP = 0x00000200
-                       DETACHED_PROCESS = 0x00000008
-                       popen_params.update(creationflags=CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
-                  else: ffmpeg_cmd = 'ffmpeg '
+              if AceConfig.osplatform == 'Windows':
+                    ffmpeg_cmd = 'ffmpeg.exe '
+                    CREATE_NO_WINDOW = 0x08000000
+                    CREATE_NEW_PROCESS_GROUP = 0x00000200
+                    DETACHED_PROCESS = 0x00000008
+                    popen_params.update(creationflags=CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+              else: ffmpeg_cmd = 'ffmpeg '
 
-                  ffmpeg_cmd += '-hwaccel auto -hide_banner -loglevel fatal -re -i %s -c copy -f mpegts -' % url
-                  transcoder = Popen(ffmpeg_cmd.split(), **popen_params)
-                  out = transcoder.stdout
-                  logger.warning('HLS stream detected. Ffmpeg transcoding started')
-              else: out = self._streamReaderConnection.raw
+              ffmpeg_cmd += '-hwaccel auto -hide_banner -loglevel fatal -re -i %s -c copy -f mpegts -' % url
+              transcoder = Popen(ffmpeg_cmd.split(), **popen_params)
+              out = transcoder.stdout
+              logger.warning('HLS stream detected. Ffmpeg transcoding started')
+          else: out = self._streamReaderConnection.raw
 
-          except requests.exceptions.RequestException:
-              logger.error('Failed to open video stream %s' % url)
+          with self._lock: self._streamReaderState = 2; self._lock.notifyAll()
+          self.play_event()
+
+          while 1:
+              self.getPlayEvent() # Wait for PlayEvent (stop/resume sending data from AceEngine to streamReaderQueue)
+              clients = counter.getClients(cid)
+              try: data = out.read(AceConfig.readchunksize)
+              except: data = None
+              if data is not None and clients:
+                  self._streamReaderQueue.get() if self._streamReaderQueue.full() else self._streamReaderQueue.put(data)
+                  for c in clients:
+                      try: c.queue.put(data, timeout=5)
+                      except gevent.queue.Full:  #Queue.Full client does not read data from buffer until 5sec - disconnect it
+                          if len(clients) > 1:
+                              logger.debug('Disconnecting client: %s' % c.handler.clientip)
+                              c.destroy()
+              elif counter.count(cid) == 0: logger.debug('All clients disconnected - broadcast stoped'); break
+              else: logger.warning('No data received - broadcast stoped'); counter.deleteAll(cid); break
+
+        except requests.exceptions.HTTPError as err:
+              logger.error('An http error occurred while connecting to aceengine: %s' % err)
+        except requests.exceptions.ConnectTimeout:
+              logger.error('The request timed out while trying to connect to %s' % url)
+        except requests.exceptions.ReadTimeout:
+              logger.error('The aceengine did not send any data in 60sec')
+        except requests.exceptions.RequestException:
+              logger.error('There was an ambiguous exception that occurred while handling request to %s' % url)
+        except:
+              logger.error('Unexpected error in streamreader')
               logger.error(traceback.format_exc())
-          except: logger.error(traceback.format_exc())
 
-          else:
-              with self._lock: self._streamReaderState = 2; self._lock.notifyAll()
-              self.play_event()
-              while 1:
-                  self.getPlayEvent() # Wait for PlayEvent (stop/resume sending data from AceEngine to streamReaderQueue)
-                  clients = counter.getClients(cid)
-                  try: data = out.read(AceConfig.readchunksize)
-                  except: data = None
-                  if data is not None and clients:
-                      if self._streamReaderQueue.full(): self._streamReaderQueue.get()
-                      self._streamReaderQueue.put(data)
-                      for c in clients:
-                          try: c.queue.put(data, timeout=5)
-                          except gevent.queue.Full:  #Queue.Full client does not read data from buffer until 5sec - disconnect it
-                              if len(clients) > 1:
-                                  logger.debug('Disconnecting client: %s' % c.handler.clientip)
-                                  c.destroy()
-                  elif counter.count(cid) == 0: logger.debug('All clients disconnected - broadcast stoped'); break
-                  else: logger.warning('No data received - broadcast stoped'); counter.deleteAll(cid); break
-          finally:
+        finally:
               with self._lock: self._streamReaderState = None; self._lock.notifyAll()
-              if transcoder:
+              if transcoder is not None:
                  try: transcoder.kill(); logger.warning('Ffmpeg transcoding stoped')
                  except: pass
 
@@ -303,6 +310,8 @@ class AceClient(object):
                 # If something happened during read, abandon reader.
                 logger.error('Exception at socket read. AceClient destroyed')
                 if not self._shuttingDown.isSet(): self._shuttingDown.set()
+                self._socket = None
+                self.hanggreenlet.kill()
                 return
             else:
                 # Parsing everything only if the string is not empty
@@ -311,7 +320,7 @@ class AceClient(object):
                 if self._recvbuffer.startswith(AceMessage.response.HELLO):
                     try: params = { k:v for k,v in (x.split('=') for x in self._recvbuffer.split() if '=' in x) }
                     except: logger.error("Can't parse HELLOTS"); params = {}
-                    if 'version_code' in params: self._engine_version_code = params['version_code']
+                    self._engine_version_code = params['version_code'] if 'version_code' in params else None
                     if 'key' in params:
                         self._write(AceMessage.request.READY_key(params['key'], self._product_key))
                         self._request_key = None
@@ -326,8 +335,8 @@ class AceClient(object):
                     try:
                         self._auth = self._recvbuffer.split()[1]
                         self._write(AceMessage.request.USERDATA(self._gender, self._age))
-                    except: pass
-                    self._authevent.set()
+                    except: self._auth = None; pass
+                    else: self._authevent.set()
                 # GETUSERDATA
                 elif self._recvbuffer.startswith(AceMessage.response.GETUSERDATA):
                     raise AceException('You should init me first!')
@@ -369,7 +378,7 @@ class AceClient(object):
                         try:
                              params = { k:v for k,v in (x.split('=') for x in self._recvbuffer.split() if '=' in x) }
                              self._write(AceMessage.request.LIVESEEK(int(params['last']) - self._seekback))
-                             logger.debug('Seeking back.....')
+                             logger.debug('Seeking back..<<..')
                              self._started_again = True
                         except: logger.error("Can't parse %s" % AceMessage.response.LIVEPOS)
                 # CID
@@ -393,5 +402,7 @@ class AceClient(object):
                     self._socket.get_socket().shutdown(SHUT_WR)
                     self._recvbuffer = self._socket.read_all()
                     self._socket.close()
+                    self._socket = None
+                    self.hanggreenlet.kill()
                     logger.debug('AceClient destroyed')
-                    return
+        return

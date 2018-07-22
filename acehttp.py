@@ -1,11 +1,20 @@
 #!/usr/local/bin/python2
 # -*- coding: utf-8 -*-
 '''
+
 AceProxy: Ace Stream to HTTP Proxy
 Website: https://github.com/pepsik-kiev/HTTPAceProxy
+
+!!!!! Requirements !!!!!
+
+Python 2.x.x >= 2.7.10
+gevent >= 1.2.2
+psutil >= 5.3.0
+
 '''
 __author__ = 'ValdikSS, AndreyPavlenko, Dorik1972'
 
+import traceback
 import gevent
 # Monkeypatching and all the stuff
 from gevent import monkey; monkey.patch_all()
@@ -18,25 +27,26 @@ base_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(base_dir, 'modules'))
 for wheel in glob.glob(os.path.join(base_dir, 'modules/wheels/') + '*.whl'): sys.path.insert(0, wheel)
 
-import aceclient
-from aceclient.clientcounter import ClientCounter
-import aceconfig
-from aceconfig import AceConfig
-import traceback
 import signal
 import logging
 import psutil
 import time
 import requests
+from ipaddr import IPNetwork, IPAddress
 from socket import error as SocketException
 from socket import socket, AF_INET, SOCK_DGRAM
 from base64 import b64encode
-import pkg_resources
 import BaseHTTPServer, SocketServer
 from modules.PluginInterface import AceProxyPlugin
 from concurrent.futures import ThreadPoolExecutor
 
+import aceclient
+from aceclient.clientcounter import ClientCounter
+import aceconfig
+from aceconfig import AceConfig
+
 class ThreadPoolMixIn(SocketServer.ThreadingMixIn):
+
     allow_reuse_address = daemon_threads = True
 
     def process_request_thread(self, request, client_address):
@@ -93,8 +103,8 @@ class HTTPHandler(BaseHTTPServer.BaseHTTPRequestHandler):
 
         # Connected client IP address
         self.clientip = self.headers['X-Forwarded-For'] if 'X-Forwarded-For' in self.headers else self.client_address[0]
-        logger.info("Accepted connection from %s path %s" % (self.clientip, requests.compat.unquote(self.path)))
-        logger.debug("Headers: %s" % self.headers.dict)
+        logger.info('Accepted connection from %s path %s' % (self.clientip, requests.compat.unquote(self.path)))
+        logger.debug('Headers: %s' % self.headers.dict)
         self.requrl = requests.compat.urlparse(self.path)
         self.query = self.requrl.query
         self.path = self.requrl.path[:-1] if self.requrl.path.endswith('/') else self.requrl.path
@@ -169,10 +179,9 @@ class HTTPHandler(BaseHTTPServer.BaseHTTPRequestHandler):
 
         # Make dict with parameters
         # [file_indexes, developer_id, affiliate_id, zone_id, stream_id]
-        paramsdict = dict()
-        for i in range(3, 8):
-            try: paramsdict[aceclient.acemessages.AceConst.START_PARAMS[i-3]] = int(self.splittedpath[i])
-            except (IndexError, ValueError): paramsdict[aceclient.acemessages.AceConst.START_PARAMS[i-3]] = '0'
+        paramsdict = {}.fromkeys(aceclient.acemessages.AceConst.START_PARAMS, '0')
+        for i in range(3, len(self.splittedpath)):
+            paramsdict[aceclient.acemessages.AceConst.START_PARAMS[i-3]] = self.splittedpath[i] if self.splittedpath[i].isdigit() else '0'
         paramsdict[self.reqtype] = requests.compat.unquote(self.splittedpath[2]) #self.path_unquoted
         #End parameters dict
 
@@ -183,7 +192,7 @@ class HTTPHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                url = 'http://%s:%s/server/api' % (AceConfig.acehost, AceConfig.aceHTTPport)
                headers = {'User-Agent': 'Magic Browser'}
                params = {'method': 'get_media_files', self.reqtype: paramsdict[self.reqtype]}
-               channelName = requests.get(url, headers=headers, params=params, timeout=5).json()['result'][str(paramsdict['file_indexes'])]
+               channelName = requests.get(url, headers=headers, params=params, timeout=5).json()['result'][paramsdict['file_indexes']]
            except: channelName = CID
         if not channelIcon: channelIcon = 'http://static.acestream.net/sites/acestream/img/ACE-logo.png'
         # Create client
@@ -333,11 +342,12 @@ def drop_privileges(uid_name='nobody', gid_name='nogroup'):
     os.setuid(running_uid)
 
     # Ensure a very conservative umask
-    old_umask = os.umask(077)
+    old_umask = os.umask(int('077', 8))
 
     if os.getuid() == running_uid and os.getgid() == running_gid:
         # could be useful
         os.environ['HOME'] = running_uid_home
+        logger.info('Changed permissions to: %s: %i, %s, %i' % (uid_name, running_uid, gid_name, running_gid))
         return True
     return False
 
@@ -359,7 +369,7 @@ def spawnAce(cmd, delay=0.1):
     except: return False
 
 def checkFirewall(clientip):
-    try: clientinrange = any([requests.utils.address_in_network(clientip, i if '/' in i else i+'/0') for i in AceConfig.firewallnetranges])
+    try: clientinrange = any([IPAddress(clientip) in IPNetwork(i) for i in AceConfig.firewallnetranges])
     except: logger.error('Check firewall netranges settings !'); return False
     if (AceConfig.firewallblacklistmode and clientinrange) or (not AceConfig.firewallblacklistmode and not clientinrange): return False
     return True
@@ -426,9 +436,11 @@ def clean_proc():
 def shutdown(signum=0, frame=0):
     logger.info('Shutdown server.....')
     clean_proc()
-    server.pool.shutdown()
+    server.pool.shutdown(wait=True)
     server.shutdown()
     server.server_close()
+    import gc
+    gevent.killall([obj for obj in gc.get_objects() if isinstance(obj, gevent.Greenlet)])
     logger.info('Bye Bye .....')
     sys.exit()
 
@@ -448,17 +460,15 @@ logging.basicConfig(level=AceConfig.loglevel, filename=AceConfig.logfile, format
 logger = logging.getLogger('HTTPServer')
 ### Initial settings for devnull
 if AceConfig.acespawn or AceConfig.transcode: DEVNULL = open(os.devnull, 'wb')
+
+logger.info('Ace Stream HTTP Proxy server starting .....')
+
 #### Initial settings for AceHTTPproxy host IP
 logger.debug('Ace Stream HTTP Proxy server IP: %s' % AceConfig.httphost)
 # Check whether we can bind to the defined port safely
 if AceConfig.osplatform != 'Windows' and os.getuid() != 0 and AceConfig.httpport <= 1024:
     logger.error('Cannot bind to port %s without root privileges' % AceConfig.httpport)
     sys.exit(1)
-
-logger.info('Ace Stream HTTP Proxy server starting .....')
-for p in [(p.project_name,p.version) for p in pkg_resources.working_set \
-              if p.project_name in ('Python', 'gevent', 'greenlet', 'psutil', 'jinja2')]:
-    logger.debug('Using %s %s' % (p[0], p[1]))
 
 # Dropping root privileges if needed
 if AceConfig.osplatform != 'Windows' and AceConfig.aceproxyuser and os.getuid() == 0:
@@ -514,7 +524,7 @@ if ace_pid and AceConfig.osplatform == 'Windows': detectPort()
 try: os.chdir(os.path.dirname(os.path.realpath(__file__)))
 except: pass
 # Creating dict of handlers
-AceStuff.pluginshandlers = dict()
+AceStuff.pluginshandlers = {}
 # And a list with plugin instances
 AceStuff.pluginlist = list()
 sys.path.insert(0, 'plugins')

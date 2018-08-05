@@ -202,6 +202,7 @@ class HTTPHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         if not channelIcon: channelIcon = 'http://static.acestream.net/sites/acestream/img/ACE-logo.png'
         # Create client
         self.client = Client(CID, self, channelName, channelIcon)
+        restartondatareadtimeout = False
         try:
             # If there is no existing broadcast we create it
             if AceStuff.clientcounter.add(CID, self.client) == 1:

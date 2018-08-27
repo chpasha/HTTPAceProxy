@@ -22,10 +22,8 @@ class AceDefConfig(object):
     acestartuptimeout = 10
     aceconntimeout = 5
     aceresulttimeout = 5
-    httphost='0.0.0.0'
+    httphost=''
     httpport = 8000
-    readchunksize = 8192
-    readcachesize = 1024
     aceproxyuser = ''
     firewall = False
     firewallblacklistmode = False
@@ -65,3 +63,5 @@ class AceDefConfig(object):
             return True
 
     osplatform = platform.system()
+    #: Python 3.x?
+    is_py3 = (platform.python_version_tuple()[0] == '3')

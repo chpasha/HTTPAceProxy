@@ -12,9 +12,10 @@ import logging
 import bencode, hashlib
 import time
 import gevent
-import threading
 from requests.compat import unquote
 from PluginInterface import AceProxyPlugin
+try: from urlparse import parse_qs
+except: from urllib.parse import parse_qs
 import config.torrentfilms as config
 from aceconfig import AceConfig
 
@@ -24,7 +25,7 @@ class Torrentfilms(AceProxyPlugin):
 
     def __init__(self, AceConfig, AceStuff):
         self.logger = logging.getLogger('plugin_TorrentFilms')
-        self.lock = threading.Lock()
+        self.lock = gevent.lock.Semaphore()
         self.playlist = []
         self.videoextdefaults = ('.3gp','.aac','.ape','.asf','.avi','.dv','.divx','.flac','.flc','.flv','.m2ts','.m4a','.mka','.mkv',
                                  '.mpeg','.mpeg4','.mpegts','.mpg4','.mp3','.mp4','.mpg','.mov','.m4v','.ogg','.ogm','.ogv','.oga',
@@ -35,7 +36,6 @@ class Torrentfilms(AceProxyPlugin):
 
     def playlistTimedDownloader(self):
         while 1:
-            time.sleep(15)
             with self.lock:
                  self.playlistdata()
             gevent.sleep(config.updateevery * 60)
@@ -53,23 +53,26 @@ class Torrentfilms(AceProxyPlugin):
             idx = 0
             try:
                with open('%s/%s' % (config.directory, filename), "rb") as torrent_file: metainfo = bencode.bdecode(torrent_file.read())
-               infohash = hashlib.sha1(bencode.bencode(metainfo[b'info'])).hexdigest()
-            except: logger.error('The file %s may be corrupted. BencodeDecodeError!' % filename)
+               infohash = hashlib.sha1(bencode.bencode(metainfo['info'])).hexdigest()
+            except: self.logger.error('The file %s may be corrupted. BencodeDecodeError!' % filename)
             else:
                self.logger.debug('%s' % filename)
-               if b'files'in metainfo[b'info']:
+               if 'files'in metainfo['info']:
                   try:
-                     for files in metainfo[b'info'][b'files']:
-                        if ''.join(files[b'path']).endswith(self.videoextdefaults):
-                           self.playlist.append([''.join(files[b'path']).translate({ord(c): None for c in '%~}{][^$#@*,-!?&`|><+='}), infohash, str(idx), metainfo[b'info'][b'name']])
+                     for files in metainfo['info']['files']:
+                        if ''.join(files['path']).endswith(self.videoextdefaults):
+                           self.playlist.append([''.join(files['path']).translate({ord(c): None for c in '%~}{][^$#@*,-!?&`|><+='}), infohash, str(idx), metainfo['info']['name']])
                            idx+=1
                   except Exception as e:
                      self.logger.error("Can't decode content of: %s\r\n%s" % (filename,repr(e)))
                else:
                     try:
-                       self.playlist.append([metainfo[b'info'][b'name'].translate({ord(c): None for c in '%~}{][^$#@*,-!?&`|><+='}), infohash, '0', 'Other'])
+                       self.playlist.append([metainfo['info']['name'].translate({ord(c): None for c in '%~}{][^$#@*,-!?&`|><+='}), infohash, '0', 'Other'])
                     except:
-                       self.playlist.append([filename.decode('utf-8').translate({ord(c): None for c in '%~}{][^$#@*,-!?&`|><+='}), infohash, '0', 'Other'])
+                       try:
+                           self.playlist.append([filename.decode('utf-8').translate({ord(c): None for c in '%~}{][^$#@*,-!?&`|><+='}), infohash, '0', 'Other'])
+                       except AttributeError:
+                           self.playlist.append([filename.translate({ord(c): None for c in '%~}{][^$#@*,-!?&`|><+='}), infohash, '0', 'Other'])
 
         self.playlist.sort(key=lambda data: (data[3], data[0]))
         return True
@@ -109,13 +112,12 @@ class Torrentfilms(AceProxyPlugin):
                connection.end_headers()
                return
 
-            params = { k:[v] for k,v in (unquote(x).split('=') for x in [s2 for s1 in connection.query.split('&') for s2 in s1.split(';')] if '=' in x) }
-            fmt = params['fmt'][0] if 'fmt' in params else None
-
-            exported = self.createPlaylist(connection.headers['Host'], connection.reqtype, fmt).encode('utf-8')
+            params = parse_qs(connection.query)
+            exported = self.createPlaylist(connection.headers['Host'], connection.reqtype, params.get('fmt', [''])[0]).encode('utf-8')
 
             connection.send_response(200)
-            connection.send_header('Content-Type', 'audio/mpegurl; charset=utf-8')
+            connection.send_header('Content-Type', 'application/x-mpegurl')
+            connection.send_header('Access-Control-Allow-Origin', '*')
             connection.send_header('Content-Length', str(len(exported)))
             connection.send_header('Connection', 'close')
             connection.end_headers()

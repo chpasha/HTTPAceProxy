@@ -21,6 +21,8 @@ import requests
 import time
 from PluginInterface import AceProxyPlugin
 from PlaylistGenerator import PlaylistGenerator
+try: from urlparse import parse_qs
+except: from urllib.parse import parse_qs
 import config.torrenttelik as config
 
 class Torrenttelik(AceProxyPlugin):
@@ -53,7 +55,7 @@ class Torrenttelik(AceProxyPlugin):
             connection.end_headers()
             return
 
-        self.params = { k:[v] for k,v in (requests.compat.unquote(x).split('=') for x in [s2 for s1 in connection.query.split('&') for s2 in s1.split(';')] if '=' in x) }
+        params = parse_qs(connection.query)
         # 15 minutes cache
         if not Torrenttelik.playlist or (int(time.time()) - Torrenttelik.playlisttime > 15 * 60):
             if not self.downloadPlaylist(config.url): connection.dieWithError(); return
@@ -72,15 +74,13 @@ class Torrenttelik(AceProxyPlugin):
             return
 
         Torrenttelik.logger.debug('Exporting m3u playlist')
-        exported = playlistgen.exportm3u(hostport, header=config.m3uheadertemplate, add_ts=add_ts, fmt=self.getparam('fmt')).encode('utf-8')
+        exported = playlistgen.exportm3u(hostport, header=config.m3uheadertemplate, add_ts=add_ts, fmt=params.get('fmt', [''])[0]).encode('utf-8')
 
         connection.send_response(200)
-        connection.send_header('Content-Type', 'audio/mpegurl; charset=utf-8')
+        connection.send_header('Content-Type', 'application/x-mpegurl')
+        connection.send_header('Access-Control-Allow-Origin', '*')
         connection.send_header('Content-Length', str(len(exported)))
         connection.send_header('Connection', 'close')
         connection.end_headers()
 
         connection.wfile.write(exported)
-
-    def getparam(self, key):
-        return self.params[key][0] if key in self.params else None

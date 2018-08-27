@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 '''
 Simple statistics plugin
 
@@ -7,9 +8,11 @@ from __future__ import division
 from PluginInterface import AceProxyPlugin
 from aceconfig import AceConfig
 from gevent.subprocess import Popen, PIPE
+try: from urlparse import parse_qs
+except: from urllib.parse import parse_qs
 import psutil
 import json
-import time, threading
+import time
 import logging, re
 import requests
 
@@ -24,22 +27,32 @@ class Stat(AceProxyPlugin):
     def __init__(self, AceConfig, AceStuff):
         self.config = AceConfig
         self.stuff = AceStuff
-        self.lock = threading.Lock()
         self.params = None
+
+    def bytes2human(self, n):
+        # http://code.activestate.com/recipes/578019
+        symbols = ('K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y')
+        prefix = { s:(1 << (i + 1)*10) for i,s in enumerate(symbols) }
+        for s in reversed(symbols):
+            if n >= prefix[s]:
+                value = float(n) / prefix[s]
+                return '%.1f%s' % (value, s)
+        return '%sB' % n
+
 
     def geo_ip_lookup(self, ip_address):
         Stat.logger.debug('Obtain geoip info for IP:%s' % ip_address)
         headers = {'User-Agent':'API Browser'}
         response = requests.get('http://geoip.nekudo.com/api/%s/en' % ip_address, headers=headers, timeout=5).json()
-        return {'country_code' : '' if not response['country']['code'] else response['country']['code'] ,
-                'country'      : '' if not response['country']['name'] else response['country']['name'] ,
+        return {'country_code' : '' if not response['country']['code'] else response['country']['code'].lower(),
+                'country'      : '' if not response['country']['name'] else response['country']['name'],
                 'city'         : '' if not response['city'] else response['city']}
 
     def mac_lookup(self,ip_address):
 
         if ip_address == AceConfig.httphost:
            from uuid import getnode
-           try: mac_address = ':'.join('%02x' % ((getnode() >> 8*i) & 0xff) for i in reversed(range(6)))
+           try: mac_address = ':'.join('%02x' % ((getnode() >> 8*i) & 0xff) for i in reversed(list(range(6))))
            except: mac_address = None
         else:
            try:
@@ -56,7 +69,8 @@ class Stat(AceProxyPlugin):
                  Popen(['ping', '-n', '1', ip_address], **popen_params)
                  pid = Popen(['arp', '-a', ip_address], **popen_params)
            except: Stat.logger.error('Check if arp util is installed!'); return 'Local IP address '
-           try: mac_address = re.search(r"(([a-f\d]{1,2}(\:|\-)){5}[a-f\d]{1,2})", pid.communicate()[0]).group(0)
+
+           try: mac_address = re.search(r'(([a-f\d]{1,2}(\:|\-)){5}[a-f\d]{1,2})', pid.communicate()[0].decode('utf-8')).group(0)
            except: mac_address = None
 
         if mac_address:
@@ -71,7 +85,7 @@ class Stat(AceProxyPlugin):
         return self.params[key][0] if key in self.params else None
 
     def handle(self, connection, headers_only=False):
-        self.params = { k:[v] for k,v in (requests.compat.unquote(x).split('=') for x in [s2 for s1 in connection.query.split('&') for s2 in s1.split(';')] if '=' in x) }
+        self.params = parse_qs(connection.query)
 
         if self.get_param('action') == 'get_status':
 
@@ -92,13 +106,13 @@ class Stat(AceProxyPlugin):
             response['sys_info'] = {
                  'os_platform': AceConfig.osplatform,
                  'cpu_nums': psutil.cpu_count(),
-                 'cpu_percent': psutil.cpu_percent(),
-                 'total_ram': round(max_mem.total/2**20,2),
-                 'used_ram': round(max_mem.used/2**20,2),
-                 'free_ram': round(max_mem.available/2**20,2),
-                 'total_disk': round(disk.total/2**30,2),
-                 'used_disk': round(disk.used/2**30,2),
-                 'free_disk': round(disk.free/2**30,2),
+                 'cpu_percent': psutil.cpu_percent(interval=1),
+                 'total_ram': self.bytes2human(max_mem.total),
+                 'used_ram': self.bytes2human(max_mem.used),
+                 'free_ram': self.bytes2human(max_mem.available),
+                 'total_disk': self.bytes2human(disk.total),
+                 'used_disk': self.bytes2human(disk.used),
+                 'free_disk': self.bytes2human(disk.free),
                   }
 
             response['connection_info'] = {
@@ -107,17 +121,13 @@ class Stat(AceProxyPlugin):
                 }
 
             response['clients_data'] = []
-
-            with self.lock: clients = self.stuff.clientcounter.clients.copy()
-
-            for i in clients:
-                for c in clients[i]:
+            with self.stuff.clientcounter.lock:
+              for i in self.stuff.clientcounter.clients:
+                 for c in self.stuff.clientcounter.clients[i]:
                     if any([requests.utils.address_in_network(c.handler.clientip,i) for i in localnetranges]):
                        clientInfo = self.mac_lookup(c.handler.clientip)
                     else:
-                       clientInfo = self.geo_ip_lookup(c.handler.clientip).get('country')+ ', '+ \
-                                    self.geo_ip_lookup(c.handler.clientip).get('city') + '&nbsp;<i class="flag '+ \
-                                    self.geo_ip_lookup(c.handler.clientip).get('country_code').lower() + '"></i>&nbsp;'
+                       clientInfo =u'<i class="flag {country_code}"></i>&nbsp;&nbsp;{country}, {city}'.format(**self.geo_ip_lookup(c.handler.clientip))
 
                     client_data = {
                         'channelIcon': c.channelIcon,
@@ -126,11 +136,11 @@ class Stat(AceProxyPlugin):
                         'clientLocation': clientInfo,
                         'startTime': time.strftime('%c', time.localtime(c.connectionTime)),
                         'durationTime': time.strftime("%H:%M:%S", time.gmtime(current_time-c.connectionTime))
-                       }
+                         }
 
                     response['clients_data'].append(client_data)
 
-            connection.wfile.write(json.dumps(response).encode('UTF8'))
+            connection.wfile.write(json.dumps(response, ensure_ascii=False).encode('utf-8'))
 
         else:
 
@@ -142,7 +152,7 @@ class Stat(AceProxyPlugin):
           connection.wfile.write(html_template)
 
 
-html_template = """
+html_template = b"""
 <!doctype html>
 <html lang="en">
   <head>
@@ -213,9 +223,9 @@ html_template = """
 
             $('#sys_info').html("OS " + sys_info.os_platform + "&nbsp;CPU cores: " + sys_info.cpu_nums +
                                 " used: " + sys_info.cpu_percent + "%</br>"+
-                                "RAM MiB &nbsp;total: " + sys_info.total_ram +
+                                "RAM &nbsp;total: " + sys_info.total_ram +
                                 " &nbsp;used: " + sys_info.used_ram +
-                                "&nbsp;free: " + sys_info.free_ram + "</br>DISK GiB &nbsp;total: " + sys_info.total_disk +
+                                "&nbsp;free: " + sys_info.free_ram + "</br>DISK &nbsp;total: " + sys_info.total_disk +
                                 "&nbsp;used: " + sys_info.used_disk + "&nbsp;free: " + sys_info.free_disk);
 
             $('#connection_info').html("Connections limit: " + connection_info.max_clients +

@@ -74,14 +74,13 @@ class AceConfig(acedefconfig.AceDefConfig):
     # HTTP AceProxy configuration
     # ----------------------------------------------------
     #
-    # Bind host. 0.0.0.0 - listen on all addresses, change to whatever IP you want to listen on this IP only
-    httphost = "0.0.0.0"
+    # HTTP Server host.
+    # 'auto' - autodetect
+    # '' or '0.0.0.0' - listen on all addresses
+    # Or change to whatever IP you want to listen on this IP only
+    httphost = '0.0.0.0'
     # HTTP Server port
     httpport = 8000
-    # Read the video input stream in chunks of the following size
-    readchunksize = 8192
-    # Cache the following number of the tailing chunks
-    readcachesize = 1024
     # If started as root, drop privileges to this user.
     # Leave empty to disable.
     aceproxyuser = ''
@@ -126,9 +125,9 @@ class AceConfig(acedefconfig.AceDefConfig):
     #
     # Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
     loglevel = logging.DEBUG
-    # Log message forma
+    # Log message format
     logfmt = '%(filename)-20s [LINE:%(lineno)-4s]# %(levelname)-8s [%(asctime)s]  %(message)s'
-    # Log date forma
+    # Log date format
     logdatefmt='%d.%m %H:%M:%S'
     # Full path to a log file
     # For Windows OS something like that logfile = "c:\\Python27\\log_AceHttp.txt"
@@ -164,4 +163,7 @@ class AceConfig(acedefconfig.AceDefConfig):
         elif useragent == 'Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1' and 'Range' in headers and not 'accept-encoding' in headers:
             return True
         elif useragent == 'samsung-agent/1.1' and 'Range' in headers and not 'accept-encoding' in headers:
+            return True
+         # Dune 301
+        elif useragent == 'DuneHD/1.0' and headers.get('Range') != 'bytes=0-':
             return True

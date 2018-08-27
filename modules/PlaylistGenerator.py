@@ -6,7 +6,7 @@ and groups
 '''
 __author__ = 'ValdikSS, AndreyPavlenko, Dorik1972'
 
-from requests.compat import quote, urlparse
+from requests.compat import quote
 from playlist import PlaylistConfig as config
 
 class PlaylistGenerator(object):
@@ -16,13 +16,13 @@ class PlaylistGenerator(object):
                  m3uheader=config.m3uheader,
                  m3uchanneltemplate=config.m3uchanneltemplate,
                  changeItem=config.changeItem,
-                 comparator=config.compareItems if config.sort else None):
+                 sort=config.sortItems if config.sort else None):
         self.itemlist = list()
         self.m3uemptyheader = m3uemptyheader
         self.m3uheader = m3uheader
         self.m3uchanneltemplate = m3uchanneltemplate
         self.changeItem = changeItem
-        self.comparator = comparator
+        self.sort = sort
 
     def addItem(self, itemdict):
         '''
@@ -61,7 +61,7 @@ class PlaylistGenerator(object):
         else: itemlist = header
 
         self._changeItems()
-        items = sorted(self.itemlist, cmp=self.comparator) if self.comparator else self.itemlist
+        items = self.sort(self.itemlist) if self.sort else self.itemlist
 
         for i in items:
             item = i.copy()
@@ -71,14 +71,14 @@ class PlaylistGenerator(object):
                 if url.endswith(('.acelive', '.acestream', '.acemedia', '.torrent')): # For .acelive and .torrent
                    item['url'] = 'http://%s/url/%s/stream.mp4' % (hostport, quote(url,''))
                 elif url.startswith('infohash://'): # For INFOHASHes
-                   item['url'] = 'http://%s/infohash/%s/stream.mp4' % (hostport, urlparse(url).netloc)
+                   item['url'] = 'http://%s/infohash/%s/stream.mp4' % (hostport, url.split('/')[2])
                 elif url.startswith('acestream://'): # For PIDs
-                   item['url'] = 'http://%s/content_id/%s/stream.mp4' % (hostport, urlparse(url).netloc)
+                   item['url'] = 'http://%s/content_id/%s/stream.mp4' % (hostport, url.split('/')[2])
                 elif archive and url.isdigit(): # For archive channel id's
                    item['url'] = 'http://%s/archive/play?id=%s' % (hostport, url)
                 elif not archive and url.isdigit(): # For channel id's
                    item['url'] = 'http://%s/channels/play?id=%s' % (hostport, url)
-                elif path == '/torrenttv/channel' : # For channel name fot torrenttv_pugin
+                elif path == '/torrenttv/channel' : # For channel name for torrenttv_plugin
                    item['url'] = 'http://%s%s/%s' % (hostport, path, url)
 
             if fmt: item['url'] += '&fmt=%s' % fmt if '?' in item['url'] else '/?fmt=%s' % fmt

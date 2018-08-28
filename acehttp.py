@@ -48,8 +48,6 @@ class ReadDataTimeoutError(Exception):
     """Base class for exceptions in this module."""
     pass
 
-class ThreadPoolMixIn(SocketServer.ThreadingMixIn):
-
 class GeventHTTPServer(HTTPServer):
 
     def process_request(self, request, client_address):

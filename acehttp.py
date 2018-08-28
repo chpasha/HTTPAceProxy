@@ -174,6 +174,7 @@ class HTTPHandler(BaseHTTPRequestHandler):
         paramsdict[self.reqtype] = requests.compat.unquote(self.splittedpath[2]) #self.path_unquoted
         #End parameters dict
         self.client = None
+        restartondatareadtimeout = False
         try:
             CID, NAME = self.getINFOHASH(self.reqtype, paramsdict[self.reqtype], paramsdict['file_indexes'])
             if not channelName: channelName = NAME
@@ -193,6 +194,14 @@ class HTTPHandler(BaseHTTPRequestHandler):
                 logger.warning('Broadcast "%s" created' % self.client.channelName)
 
         except aceclient.AceException as e: self.dieWithError(500, 'AceClient exception: %s' % repr(e))
+        except ReadDataTimeoutError as te:
+            logger.warning('Timeout exception received, checking restart policy')
+            if AceConfig.acerestartondatatimeout:
+                logger.warning('Restart is enabled, scheduling restart')
+                restartondatareadtimeout = True
+            else:
+                logger.warning('Restart is disabled, set acerestartondatatimeout = True for restart')
+                self.dieWithError(500, 'Read Timeout exception: %s' % repr(te))
         except Exception as e: self.dieWithError(500, 'Unkonwn exception: %s' % repr(e))
         else:
             # streaming to client
@@ -203,6 +212,8 @@ class HTTPHandler(BaseHTTPRequestHandler):
             if self.client and AceStuff.clientcounter.delete(CID, self.client) == 0:
                 logger.warning('Broadcast "%s" stoped. Last client disconnected' % self.client.channelName)
                 if stream_reader and not stream_reader.ready(): stream_reader.join(timeout=3)
+            if restartondatareadtimeout:
+                self.handleRequest(headers_only, channelName, channelIcon, fmt)
         return
 
     def getINFOHASH(self, reqtype, url, idx):

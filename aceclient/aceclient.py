@@ -238,7 +238,7 @@ class AceClient(object):
            self._write(AceMessage.request.EVENT('play'))
 
            while 1:
-              gevent.sleep()
+              #gevent.sleep()
               clients = counter.getClients(cid)
               if clients:
                   try:
@@ -289,7 +289,7 @@ class AceClient(object):
         logger = logging.getLogger('AceClient_recvdata')
 
         while 1:
-            gevent.sleep()
+            #gevent.sleep()
             try:
                 self._recvbuffer = self._socket.read_until('\r\n').strip()
                 logger.debug('<<< %s' % requests.compat.unquote(self._recvbuffer))

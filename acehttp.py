@@ -266,7 +266,7 @@ class Client:
                 logger.error("Can't found fmt key. Ffmpeg transcoding not started !")
         try:
             while self.handler.connection and self.ace._streamReaderState.ready():
-                gevent.sleep()
+                #gevent.sleep()
                 try: out.write(self.queue.get(timeout=AceConfig.videotimeout))
                 except gevent.queue.Empty:
                     logger.warning('No data received from StreamReader for %ssec - disconnecting "%s"' % (AceConfig.videotimeout,self.channelName))

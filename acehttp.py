@@ -227,7 +227,7 @@ class Client:
         # Sending videostream headers to client
         if self.handler.connection:
             response_headers = {'Connection': 'Keep-Alive', 'Keep-Alive': 'timeout=15, max=100', 'Content-Type': 'application/octet-stream'}
-            self.handler.send_response(self.ace._streamReaderConnection.status_code)
+            self.handler.send_response(200)
             logger.debug('Sending HTTPAceProxy headers to client: %s' % response_headers)
             for k,v in list(response_headers.items()): self.handler.send_header(k,v)
             self.handler.end_headers()
@@ -245,7 +245,6 @@ class Client:
                                  'shell'  : False }
 
                 transcoder = gevent.subprocess.Popen(AceConfig.transcodecmd[fmt], **popen_params)
-                gevent.sleep()
                 out = transcoder.stdin
                 logger.warning('Ffmpeg transcoding started')
             else:
@@ -266,8 +265,8 @@ class Client:
             return
 
     def destroy(self):
+            if self.handler.connection: self.handler.connection.close()
             self.queue.queue.clear()
-            self.handler.connection.close()
 
 class AceStuff(object):
     '''

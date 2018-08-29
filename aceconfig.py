@@ -40,7 +40,7 @@ class AceConfig(acedefconfig.AceDefConfig):
     # Ace Stream Engine connection timeout
     aceconntimeout = 5
     # Ace Stream Engine authentication result & API port answers timeout
-    aceresulttimeout = 10
+    aceresulttimeout = 30
     # Timeout for no data received
     acereaddatatimeout = 30
     # Restart if no data receive within timeout

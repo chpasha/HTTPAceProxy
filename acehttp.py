@@ -269,8 +269,9 @@ class Client:
                 #gevent.sleep()
                 try: out.write(self.queue.get(timeout=AceConfig.videotimeout))
                 except gevent.queue.Empty:
-                    logger.warning('No data received from StreamReader for %ssec - disconnecting "%s"' % (AceConfig.videotimeout,self.channelName))
-                    break
+                    error = 'No data received from StreamReader for %ssec - disconnecting "%s"' % (AceConfig.videotimeout, self.channelName)
+                    logger.warning(error)
+                    raise ReadDataTimeoutError(error)
                 except: break
         finally:
             self.destroy()

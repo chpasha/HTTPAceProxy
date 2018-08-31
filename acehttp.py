@@ -191,6 +191,11 @@ class HTTPHandler(BaseHTTPRequestHandler):
                 stream_reader = gevent.spawn(self.client.ace.startStreamReader, url, CID, AceStuff.clientcounter, dict(self.headers))
                 logger.warning('Broadcast "%s" created' % self.client.channelName)
 
+            # streaming to client
+            logger.info('Streaming "%s" to %s started' % (self.client.channelName, self.clientip))
+            self.client.handle(self.reqparams.get('fmt', [''])[0])
+            logger.info('Streaming "%s" to %s finished' % (self.client.channelName, self.clientip))
+
         except aceclient.AceException as e: self.dieWithError(500, 'AceClient exception: %s' % repr(e))
         except ReadDataTimeoutError as te:
             logger.warning('Timeout exception received, checking restart policy')
@@ -201,11 +206,6 @@ class HTTPHandler(BaseHTTPRequestHandler):
                 logger.warning('Restart is disabled, set restart_on_videotimeout = True for restart')
                 self.dieWithError(500, 'Read Timeout exception: %s' % repr(te))
         except Exception as e: self.dieWithError(500, 'Unkonwn exception: %s' % repr(e))
-        else:
-            # streaming to client
-            logger.info('Streaming "%s" to %s started' % (self.client.channelName, self.clientip))
-            self.client.handle(self.reqparams.get('fmt', [''])[0])
-            logger.info('Streaming "%s" to %s finished' % (self.client.channelName, self.clientip))
         finally:
             if self.client and AceStuff.clientcounter.delete(CID, self.client) == 0:
                 logger.warning('Broadcast "%s" stoped. Last client disconnected' % self.client.channelName)

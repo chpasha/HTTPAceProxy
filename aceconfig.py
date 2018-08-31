@@ -41,10 +41,6 @@ class AceConfig(acedefconfig.AceDefConfig):
     aceconntimeout = 5
     # Ace Stream Engine authentication result & API port answers timeout
     aceresulttimeout = 30
-    # Timeout for no data received
-    acereaddatatimeout = 30
-    # Restart if no data receive within timeout
-    acerestartondatatimeout = True
     # Ace Stream Engine stream type hls or http
     # Support if AceEngine version_code >= 3010500
     # !!!! Note ! If you want use hls you need to install ffmpeg !!!!
@@ -69,6 +65,8 @@ class AceConfig(acedefconfig.AceDefConfig):
     videoseekback = 0
     # Waiting time response from AceEngine server for playable url. In seconds.
     videotimeout = 30
+    # Restart if no data receive within timeout
+    restart_on_videotimeout = True
     #
     # ----------------------------------------------------
     # HTTP AceProxy configuration

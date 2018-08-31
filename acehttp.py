@@ -194,11 +194,11 @@ class HTTPHandler(BaseHTTPRequestHandler):
         except aceclient.AceException as e: self.dieWithError(500, 'AceClient exception: %s' % repr(e))
         except ReadDataTimeoutError as te:
             logger.warning('Timeout exception received, checking restart policy')
-            if AceConfig.acerestartondatatimeout:
+            if AceConfig.restart_on_videotimeout:
                 logger.warning('Restart is enabled, scheduling restart')
                 restartondatareadtimeout = True
             else:
-                logger.warning('Restart is disabled, set acerestartondatatimeout = True for restart')
+                logger.warning('Restart is disabled, set restart_on_videotimeout = True for restart')
                 self.dieWithError(500, 'Read Timeout exception: %s' % repr(te))
         except Exception as e: self.dieWithError(500, 'Unkonwn exception: %s' % repr(e))
         else:

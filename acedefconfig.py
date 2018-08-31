@@ -22,8 +22,6 @@ class AceDefConfig(object):
     acestartuptimeout = 10
     aceconntimeout = 5
     aceresulttimeout = 5
-    acereaddatatimeout = 60
-    acerestartondatatimeout = False
     httphost='0.0.0.0'
     httpport = 8000
     aceproxyuser = ''
@@ -44,6 +42,7 @@ class AceDefConfig(object):
     preferred_audio_language = 'rus'
     videoseekback = 0
     videotimeout = 30
+    restart_on_videotimeout = False
     useacelive = True
     fakeuas = ('Mozilla/5.0 IMC plugin Macintosh', )
     loglevel = logging.DEBUG

@@ -196,7 +196,8 @@ class HTTPHandler(BaseHTTPRequestHandler):
             self.client.handle(self.reqparams.get('fmt', [''])[0])
             logger.info('Streaming "%s" to %s finished' % (self.client.channelName, self.clientip))
 
-        except aceclient.AceException as e: self.dieWithError(500, 'AceClient exception: %s' % repr(e))
+        except aceclient.AceException as e:
+            self.dieWithError(500, 'AceClient exception: %s' % repr(e))
         except ReadDataTimeoutError as te:
             logger.warning('Timeout exception received, checking restart policy')
             if AceConfig.restart_on_videotimeout:
@@ -205,7 +206,8 @@ class HTTPHandler(BaseHTTPRequestHandler):
             else:
                 logger.warning('Restart is disabled, set restart_on_videotimeout = True for restart')
                 self.dieWithError(500, 'Read Timeout exception: %s' % repr(te))
-        except Exception as e: self.dieWithError(500, 'Unkonwn exception: %s' % repr(e))
+        except Exception as e:
+            self.dieWithError(500, 'Unkonwn exception: %s' % repr(e))
         finally:
             if self.client and AceStuff.clientcounter.delete(CID, self.client) == 0:
                 logger.warning('Broadcast "%s" stoped. Last client disconnected' % self.client.channelName)
@@ -266,19 +268,17 @@ class Client:
                 logger.error("Can't found fmt key. Ffmpeg transcoding not started !")
         try:
             while self.handler.connection and self.ace._streamReaderState.ready():
-                #gevent.sleep()
-                try: out.write(self.queue.get(timeout=AceConfig.videotimeout))
+                try:
+                    out.write(self.queue.get(timeout=AceConfig.videotimeout))
                 except gevent.queue.Empty:
                     error = 'No data received from StreamReader for %ssec - disconnecting "%s"' % (AceConfig.videotimeout, self.channelName)
                     logger.warning(error)
                     raise ReadDataTimeoutError(error)
-                except: break
         finally:
             self.destroy()
             if transcoder is not None:
                try: transcoder.kill(); logger.warning('Ffmpeg transcoding stoped')
                except: pass
-            return
 
     def destroy(self):
             if self.handler.connection: self.handler.connection.close()

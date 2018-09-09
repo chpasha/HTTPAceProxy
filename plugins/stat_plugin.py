@@ -4,7 +4,6 @@ Simple statistics plugin
 
 To use it, go to http://acehttp_proxy_ip:port/stat
 '''
-from __future__ import division
 from PluginInterface import AceProxyPlugin
 from aceconfig import AceConfig
 from gevent.subprocess import Popen, PIPE
@@ -28,17 +27,6 @@ class Stat(AceProxyPlugin):
         self.stuff = AceStuff
         self.params = None
 
-    def bytes2human(self, n):
-        # http://code.activestate.com/recipes/578019
-        symbols = ('K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y')
-        prefix = { s:(1 << (i + 1)*10) for i,s in enumerate(symbols) }
-        for s in reversed(symbols):
-            if n >= prefix[s]:
-                value = float(n) / prefix[s]
-                return '%.1f%s' % (value, s)
-        return '%sB' % n
-
-
     def geo_ip_lookup(self, ip_address):
         Stat.logger.debug('Obtain geoip info for IP:%s' % ip_address)
         headers = {'User-Agent':'API Browser'}
@@ -49,15 +37,16 @@ class Stat(AceProxyPlugin):
 
     def mac_lookup(self,ip_address):
 
+        mac_address = None
         if ip_address == AceConfig.httphost:
            from uuid import getnode
            try: mac_address = ':'.join('%02x' % ((getnode() >> 8*i) & 0xff) for i in reversed(list(range(6))))
-           except: mac_address = None
+           except: pass
         else:
            try:
               if AceConfig.osplatform != 'Windows':
-                 Popen(['ping', '-c', '1', ip_address], stdout = PIPE, shell=False)
-                 pid = Popen(['arp', '-n', ip_address], stdout = PIPE, shell=False)
+                 p1 = Popen(['ping', '-c', '1', ip_address], stdout = PIPE, shell=False)
+                 p2 = Popen(['arp', '-n', ip_address], stdout = PIPE, shell=False)
               else:
                  popen_params = { 'stdout' : PIPE,
                                   'shell'  : False }
@@ -65,12 +54,14 @@ class Stat(AceProxyPlugin):
                  CREATE_NEW_PROCESS_GROUP = 0x00000200  # note: could get it from subprocess
                  DETACHED_PROCESS = 0x00000008          # 0x8 | 0x200 == 0x208
                  popen_params.update(creationflags=CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP |  DETACHED_PROCESS)
-                 Popen(['ping', '-n', '1', ip_address], **popen_params)
-                 pid = Popen(['arp', '-a', ip_address], **popen_params)
+                 p1 = Popen(['ping', '-n', '1', ip_address], **popen_params)
+                 p2 = Popen(['arp', '-a', ip_address], **popen_params)
            except: Stat.logger.error('Check if arp util is installed!'); return 'Local IP address '
 
-           try: mac_address = re.search(r'(([a-f\d]{1,2}(\:|\-)){5}[a-f\d]{1,2})', pid.communicate()[0].decode('utf-8')).group(0)
-           except: mac_address = None
+           try: mac_address = re.search(r'(([a-f\d]{1,2}(\:|\-)){5}[a-f\d]{1,2})', p2.stdout.read().decode('utf-8')).group(0)
+           except: pass
+
+           p1.stdout.close(); p2.stdout.close()
 
         if mac_address:
            headers = {'User-Agent':'API Browser'}
@@ -106,12 +97,12 @@ class Stat(AceProxyPlugin):
                  'os_platform': AceConfig.osplatform,
                  'cpu_nums': psutil.cpu_count(),
                  'cpu_percent': psutil.cpu_percent(interval=1),
-                 'total_ram': self.bytes2human(max_mem.total),
-                 'used_ram': self.bytes2human(max_mem.used),
-                 'free_ram': self.bytes2human(max_mem.available),
-                 'total_disk': self.bytes2human(disk.total),
-                 'used_disk': self.bytes2human(disk.used),
-                 'free_disk': self.bytes2human(disk.free),
+                 'total_ram': AceConfig.bytes2human(max_mem.total),
+                 'used_ram': AceConfig.bytes2human(max_mem.used),
+                 'free_ram': AceConfig.bytes2human(max_mem.available),
+                 'total_disk': AceConfig.bytes2human(disk.total),
+                 'used_disk': AceConfig.bytes2human(disk.used),
+                 'free_disk': AceConfig.bytes2human(disk.free),
                   }
 
             response['connection_info'] = {

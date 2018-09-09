@@ -43,11 +43,11 @@ from aceclient.clientcounter import ClientCounter
 import aceconfig
 from aceconfig import AceConfig
 
-
 class GeventHTTPServer(HTTPServer):
 
     def process_request(self, request, client_address):
         checkAce() # Check is AceStream engine alive
+        gevent.sleep()
         gevent.spawn(self.process_request_thread, request, client_address)
 
     def process_request_thread(self, request, client_address):
@@ -57,7 +57,7 @@ class GeventHTTPServer(HTTPServer):
         finally: self.close_request(request)
 
     def handle_error(self, request, client_address):
-        logging.debug(traceback.format_exc())
+        logging.error(traceback.format_exc())
         pass
 
 class HTTPHandler(BaseHTTPRequestHandler):
@@ -167,13 +167,12 @@ class HTTPHandler(BaseHTTPRequestHandler):
             paramsdict[aceclient.acemessages.AceConst.START_PARAMS[i-3]] = self.splittedpath[i] if self.splittedpath[i].isdigit() else '0'
         paramsdict[self.reqtype] = requests.compat.unquote(self.splittedpath[2]) #self.path_unquoted
         #End parameters dict
-        self.client = None
+        self.client = stream_reader = None
         try:
             CID, NAME = self.getINFOHASH(self.reqtype, paramsdict[self.reqtype], paramsdict['file_indexes'])
             if not channelName: channelName = NAME
             if not channelIcon: channelIcon = 'http://static.acestream.net/sites/acestream/img/ACE-logo.png'
             # Create client
-            stream_reader = None
             self.client = Client(CID, self, channelName, channelIcon)
             # If there is no existing broadcast we create it
             if AceStuff.clientcounter.add(CID, self.client) == 1:
@@ -181,7 +180,7 @@ class HTTPHandler(BaseHTTPRequestHandler):
                 # Send START commands to AceEngine and Getting URL from engine
                 url = self.client.ace.START(self.reqtype, paramsdict, AceConfig.streamtype)
                 # Rewriting host:port for remote Ace Stream Engine
-                url = requests.compat.urlparse(url)._replace(netloc='%s:%s' % (AceConfig.acehost, AceConfig.aceHTTPport)).geturl()
+                url = requests.compat.urlparse(url)._replace(netloc='%s:%d' % (AceConfig.acehost, AceConfig.aceHTTPport)).geturl()
                 # Start streamreader for broadcast
                 stream_reader = gevent.spawn(self.client.ace.startStreamReader, url, CID, AceStuff.clientcounter, dict(self.headers))
                 logger.warning('Broadcast "%s" created' % self.client.channelName)
@@ -190,7 +189,6 @@ class HTTPHandler(BaseHTTPRequestHandler):
         except Exception as e: self.dieWithError(500, 'Unkonwn exception: %s' % repr(e))
         else:
             # streaming to client
-            logger.info('Streaming "%s" to %s started' % (self.client.channelName, self.clientip))
             self.client.handle(self.reqparams.get('fmt', [''])[0])
             logger.info('Streaming "%s" to %s finished' % (self.client.channelName, self.clientip))
         finally:
@@ -212,17 +210,22 @@ class Client:
         self.handler = handler
         self.channelName = channelName
         self.channelIcon = channelIcon
-        self.queue = gevent.queue.Queue(maxsize=1024) # buffer with max number of chunks in queue
-        self.ace = None
+        self.ace = self.queue = None
         self.connectionTime = time.time()
 
     def handle(self, fmt=None):
         logger = logging.getLogger("ClientHandler")
-        self.connectionTime = time.time()
 
-        if self.handler.connection and not self.ace._streamReaderState.wait(timeout=5.0):
+        if not self.ace._streamReaderState.wait(timeout=5.0):
             self.handler.dieWithError(500, 'Video stream not opened in 5sec - disconnecting')
             return
+
+        self.connectionTime = time.time()
+
+        remaining = self.connectionTime + AceConfig.videostartbuffertime
+        while self.ace._streamReaderState.ready() and remaining >= time.time():
+           if self.queue.qsize() >= self.ace._streamReaderQueue.maxsize: break
+           gevent.sleep()
 
         # Sending videostream headers to client
         if self.handler.connection:
@@ -249,24 +252,27 @@ class Client:
                 logger.warning('Ffmpeg transcoding started')
             else:
                 logger.error("Can't found fmt key. Ffmpeg transcoding not started !")
-        try:
-            while self.handler.connection and self.ace._streamReaderState.ready():
-                gevent.sleep()
-                try: out.write(self.queue.get(timeout=AceConfig.videotimeout))
-                except gevent.queue.Empty:
-                    logger.warning('No data received from StreamReader for %ssec - disconnecting "%s"' % (AceConfig.videotimeout,self.channelName))
-                    break
-                except: break
-        finally:
-            self.destroy()
-            if transcoder is not None:
-               try: transcoder.kill(); logger.warning('Ffmpeg transcoding stoped')
-               except: pass
-            return
+
+        logger.info('Streaming "%s" to %s started. Start buffer size: %s' % \
+                 (self.channelName, self.handler.clientip, AceConfig.bytes2human(self.queue.qsize()*requests.models.CONTENT_CHUNK_SIZE)))
+
+        while self.ace._streamReaderState.ready():
+            try: out.write(self.queue.get(timeout=AceConfig.videotimeout))
+            except gevent.queue.Empty:
+                logger.warning('No data received from StreamReader for %ssec - disconnecting "%s"' % (AceConfig.videotimeout,self.channelName))
+                break
+            except: break
+            finally: gevent.sleep()
+
+        if transcoder is not None:
+           try: transcoder.kill(); logger.warning('Ffmpeg transcoding stoped')
+           except: pass
+        self.destroy()
+        return
 
     def destroy(self):
+            if self.queue: self.queue.queue.clear()
             if self.handler.connection: self.handler.connection.close()
-            self.queue.queue.clear()
 
 class AceStuff(object):
     '''
@@ -407,12 +413,36 @@ def _reloadconfig(signum=None, frame=None):
 def get_ip_address():
     return [(s.connect(('1.1.1.1', 80)), s.getsockname()[0], s.close()) for s in [socket(AF_INET, SOCK_DGRAM)]][0][1]
 
+def check_compatibility(gevent_version, psutil_version):
+
+    # Check gevent for compatibility.
+    major, minor, patch = list(map(int, gevent_version.split('.')[:3]))
+    # gevent >= 1.2.2
+    assert major == 1
+    assert minor >= 2
+    assert minor >= 2
+
+    # Check psutil for compatibility.
+    major, minor, patch = list(map(int, psutil_version.split('.')[:3]))
+    # psutil >= 5.3.0
+    assert major == 5
+    assert minor >= 3
+    assert patch >= 0
+
+
 logging.basicConfig(level=AceConfig.loglevel, filename=AceConfig.logfile, format=AceConfig.logfmt, datefmt=AceConfig.logdatefmt)
 logger = logging.getLogger('HTTPServer')
 ### Initial settings for devnull
 if AceConfig.acespawn or AceConfig.transcode: DEVNULL = open(os.devnull, 'wb')
 
 logger.info('Ace Stream HTTP Proxy server on Python %s starting .....' % sys.version.split()[0])
+logger.debug('Using: gevent %s, psutil %s' % (gevent.__version__, psutil.__version__))
+
+try: check_compatibility(gevent.__version__, psutil.__version__)
+except (AssertionError, ValueError):
+    logger.error("gevent %s or psutil %s doesn't match a supported version!" % (gevent.__version__, psutil.__version__))
+    logger.info('Bye Bye .....')
+    sys.exit()
 
 #### Initial settings for AceHTTPproxy host IP
 if AceConfig.httphost == 'auto':

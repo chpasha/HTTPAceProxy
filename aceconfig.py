@@ -63,8 +63,11 @@ class AceConfig(acedefconfig.AceDefConfig):
     # Set it to 30 or so. Works only with the newest versions of AceEngine!
     # !!!!! Don't use with streamtype = 'hls' !!!!!
     videoseekback = 0
-    # Waiting time response from AceEngine server for playable url. In seconds.
+    # Waiting time response from AceEngine server for playable url or data In seconds.
     videotimeout = 30
+    # Time in seconds allocated to fill the start buffer of the broadcast
+    # 0 - disable
+    videostartbuffertime = 3
     #
     # ----------------------------------------------------
     # HTTP AceProxy configuration

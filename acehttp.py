@@ -196,16 +196,13 @@ class HTTPHandler(BaseHTTPRequestHandler):
             self.client.handle(self.reqparams.get('fmt', [''])[0])
             logger.info('Streaming "%s" to %s finished' % (self.client.channelName, self.clientip))
 
-        except aceclient.AceException as e:
-            self.dieWithError(500, 'AceClient exception: %s' % repr(e))
-        except ReadDataTimeoutError as te:
-            logger.warning('Timeout exception received, checking restart policy')
+        except (aceclient.AceException, ReadDataTimeoutError) as e:
             if AceConfig.restart_on_videotimeout:
                 logger.warning('Restart is enabled, scheduling restart')
                 restartondatareadtimeout = True
             else:
                 logger.warning('Restart is disabled, set restart_on_videotimeout = True for restart')
-                self.dieWithError(500, 'Read Timeout exception: %s' % repr(te))
+                self.dieWithError(500, 'AceClient exception: %s' % repr(e))
         except Exception as e:
             self.dieWithError(500, 'Unkonwn exception: %s' % repr(e))
         finally:

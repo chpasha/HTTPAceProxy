@@ -17,15 +17,14 @@ from PluginInterface import AceProxyPlugin
 try: from urlparse import parse_qs
 except: from urllib.parse import parse_qs
 import config.torrentfilms as config
-from aceconfig import AceConfig
 
 class Torrentfilms(AceProxyPlugin):
 
     handlers = ('films', 'proxyfilms')
 
     def __init__(self, AceConfig, AceStuff):
+        self.config = AceConfig
         self.logger = logging.getLogger('plugin_TorrentFilms')
-        self.lock = gevent.lock.Semaphore()
         self.playlist = []
         self.videoextdefaults = ('.3gp','.aac','.ape','.asf','.avi','.dv','.divx','.flac','.flc','.flv','.m2ts','.m4a','.mka','.mkv',
                                  '.mpeg','.mpeg4','.mpegts','.mpg4','.mp3','.mp4','.mpg','.mov','.m4v','.ogg','.ogm','.ogv','.oga',
@@ -36,8 +35,7 @@ class Torrentfilms(AceProxyPlugin):
 
     def playlistTimedDownloader(self):
         while 1:
-            with self.lock:
-                 self.playlistdata()
+            self.playlistdata()
             gevent.sleep(config.updateevery * 60)
 
     def playlistdata(self):
@@ -92,34 +90,29 @@ class Torrentfilms(AceProxyPlugin):
                  if fmt: ln += '/stream.mp4/?fmt=' + fmt +'\n'
                  else: ln += '/stream.mp4\n'
              else:
-                  ln += 'http://%s:%s/ace/%s?infohash=%s&transcode_audio=%s&transcode_mp3=%s&transcode_ac3=%s&preferred_audio_language=%s&_idx=%s\n' % \
-                        (AceConfig.acehostslist[0][0] if not AceConfig.acehost else AceConfig.acehost ,
-                         AceConfig.acehostslist[0][2] if not AceConfig.aceHTTPport else AceConfig.aceHTTPport,
-                         config.streamtype, infohash,AceConfig.transcode_audio, AceConfig.transcode_mp3,
-                         AceConfig.transcode_ac3, AceConfig.preferred_audio_language, key)
+                  ln += 'http://%s:%s/ace/%s?infohash=%s&_idx=%s\n' % \
+                        (self.config.httphost, self.config.ace['aceHTTPport'], config.streamtype, infohash, key)
 
         self.logger.info('Torrent  playlist created')
         return ln
 
     def handle(self, connection, headers_only=False):
 
-        with self.lock:
+        if headers_only:
+           connection.send_response(200)
+           connection.send_header('Content-Type', 'application/x-mpegurl')
+           connection.send_header('Connection', 'close')
+           connection.end_headers()
+           return
 
-            if headers_only:
-               connection.send_response(200)
-               connection.send_header('Content-Type', 'application/x-mpegurl')
-               connection.send_header('Connection', 'close')
-               connection.end_headers()
-               return
+        params = parse_qs(connection.query)
+        exported = self.createPlaylist(connection.headers['Host'], connection.reqtype, params.get('fmt', [''])[0]).encode('utf-8')
 
-            params = parse_qs(connection.query)
-            exported = self.createPlaylist(connection.headers['Host'], connection.reqtype, params.get('fmt', [''])[0]).encode('utf-8')
+        connection.send_response(200)
+        connection.send_header('Content-Type', 'application/x-mpegurl')
+        connection.send_header('Access-Control-Allow-Origin', '*')
+        connection.send_header('Content-Length', str(len(exported)))
+        connection.send_header('Connection', 'close')
+        connection.end_headers()
 
-            connection.send_response(200)
-            connection.send_header('Content-Type', 'application/x-mpegurl')
-            connection.send_header('Access-Control-Allow-Origin', '*')
-            connection.send_header('Content-Length', str(len(exported)))
-            connection.send_header('Connection', 'close')
-            connection.end_headers()
-
-            connection.wfile.write(exported)
+        connection.wfile.write(exported)

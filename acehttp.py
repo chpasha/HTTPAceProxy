@@ -188,9 +188,7 @@ class HTTPHandler(BaseHTTPRequestHandler):
                 logger.warning('Broadcast "%s" created' % self.client.channelName)
 
         except aceclient.AceException as e: self.dieWithError(500, 'AceClient exception: %s' % repr(e))
-        except Exception as e:
-                self.dieWithError(500, 'Unkonwn exception: %s' % repr(e))
-                logger.error(traceback.format_exc())
+        except Exception as e: self.dieWithError(500, 'Unkonwn exception: %s' % repr(e))
         else:
             # streaming to client
             self.client.handle(self.reqparams.get('fmt', [''])[0])
@@ -202,8 +200,8 @@ class HTTPHandler(BaseHTTPRequestHandler):
 
     def getINFOHASH(self, reqtype, url, idx):
         if reqtype not in ('direct_url', 'efile_url'):
-          if not AceStuff.clientcounter.idleace: AceStuff.clientcounter.idleace = createAce()
-          return AceStuff.clientcounter.idleace.GETINFOHASH(reqtype, url, idx)
+            if not AceStuff.clientcounter.idleace: AceStuff.clientcounter.idleace = createAce()
+            return AceStuff.clientcounter.idleace.GETINFOHASH(reqtype, url, idx)
 
 class Client:
 
@@ -329,16 +327,19 @@ def spawnAce(cmd, delay=0.1):
 
 def createAce(): # Create telnet connection to the AceEngine API port
     logger.debug('Create connection to AceEngine.....')
-    ace = aceclient.AceClient(AceConfig.ace, AceConfig.aceconntimeout, AceConfig.aceresulttimeout)
-    ace.aceInit(AceConfig.acesex, AceConfig.aceage, AceConfig.acekey, AceConfig.videoseekback, AceConfig.videotimeout)
-    return ace
+    try: ace = aceclient.AceClient(AceConfig.ace, AceConfig.aceconntimeout, AceConfig.aceresulttimeout)
+    except:
+         logger.error('Ace Stream telnet connection failed'); raise
+    else:
+         ace.aceInit(AceConfig.acesex, AceConfig.aceage, AceConfig.acekey, AceConfig.videoseekback, AceConfig.videotimeout)
+         return ace
 
 def checkAce():
     if AceConfig.acespawn and not isRunning(AceStuff.ace):
         AceStuff.clientcounter.destroyIdle()
         if hasattr(AceStuff, 'ace'): del AceStuff.ace
         if spawnAce(AceStuff.acecmd, AceConfig.acestartuptimeout):
-            logger.error("Ace Stream died, respawned it with pid %s" % AceStuff.ace.pid)
+            logger.error('Ace Stream died, respawned it with pid %s' % AceStuff.ace.pid)
             # refresh the acestream.port file for Windows only after full loading...
             if AceConfig.osplatform == 'Windows': detectPort()
             else: gevent.sleep(AceConfig.acestartuptimeout)
@@ -494,7 +495,13 @@ if AceStuff.ace:
     # Refreshes the acestream.port file for OS Windows.....
     if AceConfig.osplatform == 'Windows': detectPort()
     else: gevent.sleep(AceConfig.acestartuptimeout)
-else: logger.info('Remote AceStream engine will be used on %s:%s' % (AceConfig.ace['aceHostIP'], AceConfig.ace['aceAPIport']))
+else:
+    try:
+       url = 'http://%s:%s/webui/api/service' % (AceConfig.ace['aceHostIP'], AceConfig.ace['aceHTTPport'])
+       params = {'method': 'get_version', 'format': 'json', 'callback': 'mycallback'}
+       version = requests.get(url, params=params, timeout=5).json()['result']['version']
+       logger.info('Remote AceStream engine ver.%s will be used on %s:%s' % (version, AceConfig.ace['aceHostIP'], AceConfig.ace['aceAPIport']))
+    except: logger.error('AceStream not found!')
 
 # Loading plugins
 # Trying to change dir (would fail in freezed state)

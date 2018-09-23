@@ -256,7 +256,7 @@ class Client:
         if fmt and AceConfig.osplatform != 'Windows':
             if fmt in AceConfig.transcodecmd:
                 stderr = None if AceConfig.loglevel == logging.DEBUG else DEVNULL
-                popen_params = { 'bufsize': requests.models.CONTENT_CHUNK_SIZE,
+                popen_params = { 'bufsize': 8192,
                                  'stdin'  : gevent.subprocess.PIPE,
                                  'stdout' : self.handler.wfile,
                                  'stderr' : stderr,
@@ -269,7 +269,7 @@ class Client:
                 logger.error("Can't found fmt key. Ffmpeg transcoding not started!")
 
         logger.info('Streaming "%s" to %s started. Start buffer size: %s' % \
-                 (self.channelName, self.handler.clientip, AceConfig.bytes2human(self.queue.qsize()*requests.models.CONTENT_CHUNK_SIZE)))
+                 (self.channelName, self.handler.clientip, AceConfig.bytes2human(self.queue.qsize()*8192)))
 
         while self.handler.connection:
             gevent.sleep()

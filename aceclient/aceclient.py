@@ -245,7 +245,7 @@ class AceClient(object):
         while self._state.get(timeout=self._resulttimeout)[0] in ('2', '3'):
            gevent.sleep()
            if self._state.get(timeout=self._resulttimeout)[0] == '2': # Read data from AceEngine only if STATE 2 (DOWNLOADING)
-              data = stream.read(requests.models.CONTENT_CHUNK_SIZE)
+              data = stream.read(8192)
               if not data: return
               try: self._streamReaderQueue.put_nowait(data)
               except gevent.queue.Full: self._streamReaderQueue.get_nowait(); self._streamReaderQueue.put_nowait(data)

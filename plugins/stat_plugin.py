@@ -6,10 +6,10 @@ To use it, go to http://acehttp_proxy_ip:port/stat
 '''
 from PluginInterface import AceProxyPlugin
 from gevent.subprocess import Popen, PIPE
+from gevent import time
 try: from urlparse import parse_qs
 except: from urllib.parse import parse_qs
 import psutil
-import time
 import logging, re
 import requests
 
@@ -106,22 +106,22 @@ class Stat(AceProxyPlugin):
 
             response['connection_info'] = {
                  'max_clients': self.config.maxconns,
-                 'total_clients': self.stuff.clientcounter.total,
+                 'total_clients': self.stuff.clientcounter.totalClients(),
                 }
 
             response['clients_data'] = []
             # Dict {'CID': [client1, client2,....]} to list of values
             clients = [item for sublist in list(self.stuff.clientcounter.streams.values()) for item in sublist]
             for c in clients:
-               if any([requests.utils.address_in_network(c.handler.clientip,i) for i in localnetranges]):
-                  clientInfo = self.mac_lookup(c.handler.clientip)
+               if any([requests.utils.address_in_network(c.clientip,i) for i in localnetranges]):
+                  clientInfo = self.mac_lookup(c.clientip)
                else:
-                  clientInfo =u'<i class="flag {country_code}"></i>&nbsp;&nbsp;{country}, {city}'.format(**self.geo_ip_lookup(c.handler.clientip))
+                  clientInfo =u'<i class="flag {country_code}"></i>&nbsp;&nbsp;{country}, {city}'.format(**self.geo_ip_lookup(c.clientip))
 
                client_data = {
                     'channelIcon': c.channelIcon,
                     'channelName': c.channelName,
-                    'clientIP': c.handler.clientip,
+                    'clientIP': c.clientip,
                     'clientLocation': clientInfo,
                     'startTime': time.strftime('%c', time.localtime(c.connectionTime)),
                     'durationTime': time.strftime("%H:%M:%S", time.gmtime(current_time-c.connectionTime))

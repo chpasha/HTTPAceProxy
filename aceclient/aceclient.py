@@ -3,11 +3,9 @@ __author__ = 'ValdikSS, AndreyPavlenko, Dorik1972'
 
 import gevent
 from gevent.event import AsyncResult, Event
-import traceback
 import telnetlib
 import logging
 import requests
-import time
 import random
 from .acemessages import *
 
@@ -43,13 +41,15 @@ class AceClient(object):
         # AceEngine product key
         self._product_key = None
         # Result (Created with AsyncResult() on call)
-        self._result = AsyncResult()
+        self._auth = AsyncResult()
         # Result for START URL
-        self._urlresult = AsyncResult()
-        # URL response time from AceEngine
+        self._url = AsyncResult()
+        # Response time from AceEngine to get URL or DATA
         self._videotimeout = None
         # Result for CID
-        self._cidresult = AsyncResult()
+        self._cid = AsyncResult()
+        # Result fo LOADASYNC
+        self._loadasync = AsyncResult()
         # Current STATUS
         self._status = AsyncResult()
         # Current EVENT
@@ -63,15 +63,10 @@ class AceClient(object):
         self._seekback = None
         # Did we get START command again? For seekback.
         self._started_again = Event()
-        # AceEngine Streamreader ring buffer with max number of chunks in queue
-        self._streamReaderQueue = gevent.queue.Queue(maxsize=1000)
 
-        # Logger
-        logger = logging.getLogger('AceClient')
-        # Try to connect AceStream engine
         try:
            self._socket = Telnet(ace['aceHostIP'], ace['aceAPIport'], connect_timeout)
-           logger.debug('Successfully connected to AceStream on %s:%s' % (ace['aceHostIP'], ace['aceAPIport']))
+           logging.debug('Successfully connected to AceStream on %s:%s' % (ace['aceHostIP'], ace['aceAPIport']))
         except:
            errmsg = 'The are no alive AceStream Engines found!'
            raise AceException(errmsg)
@@ -83,30 +78,29 @@ class AceClient(object):
         '''
         AceClient Destructor
         '''
-        logger = logging.getLogger('AceClient_destroy') # Logger
         if self._shuttingDown.ready(): return   # Already in the middle of destroying
-        self._result.set()
         # Trying to disconnect
         try:
-            logger.debug('Destroying AceStream client.....')
+            logging.debug('Destroying AceStream client.....')
             self._shuttingDown.set()
             self._write(AceMessage.request.SHUTDOWN)
         except: pass # Ignore exceptions on destroy
         finally: self._shuttingDown.set()
 
     def reset(self):
+        # Reset initial values
         self._started_again.clear()
-        self._result.set()
-        self._urlresult.set()
+        self._url.set()
+        self._loadasync.set()
+        self._cid.set()
 
     def _write(self, message):
         try:
-            logger = logging.getLogger('AceClient_write')
-            logger.debug('>>> %s' % message)
+            logging.debug('>>> %s' % message)
             self._socket.write('%s\r\n' % message)
-        except EOFError as e: raise AceException('Write error! %s' % repr(e))
+        except EOFError as e: raise AceException('Telnet socket Write error! %s' % repr(e))
 
-    def aceInit(self, gender=AceConst.SEX_MALE, age=AceConst.AGE_25_34, product_key=None, videoseekback=0, videotimeout=0):
+    def aceInit(self, gender=AceConst.SEX_MALE, age=AceConst.AGE_25_34, product_key=None, videoseekback=0, videotimeout=30):
         self._gender = gender
         self._age = age
         self._product_key = product_key
@@ -114,20 +108,18 @@ class AceClient(object):
         self._videotimeout = float(videotimeout)
         self._started_again.clear()
 
-        logger = logging.getLogger('AceClient_aceInit')
-
-        self._result = AsyncResult()
+        self._auth = AsyncResult()
         self._write(AceMessage.request.HELLO) # Sending HELLOBG
-        try: params = self._result.get(timeout=self._resulttimeout)
+        try: params = self._auth.get(timeout=self._resulttimeout)
         except gevent.Timeout:
             errmsg = 'Engine response time %ssec exceeded. HELLOTS not resived!' % self._resulttimeout
             raise AceException(errmsg)
             return
 
-        self._result = AsyncResult()
+        self._auth = AsyncResult()
         self._write(AceMessage.request.READY(params.get('key',''), self._product_key))
         try:
-            if self._result.get(timeout=self._resulttimeout) == 'NOTREADY': # Get NOTREADY instead AUTH user_auth_level
+            if self._auth.get(timeout=self._resulttimeout) == 'NOTREADY': # Get NOTREADY instead AUTH user_auth_level
                errmsg = 'NOTREADY recived from AceEngine! Wrong acekey?'
                raise AceException(errmsg)
                return
@@ -145,9 +137,9 @@ class AceClient(object):
         Returns the url provided by AceEngine
         '''
         paramsdict['stream_type'] = ' '.join(['{}={}'.format(k,v) for k,v in acestreamtype.items()])
-        self._urlresult = AsyncResult()
+        self._url = AsyncResult()
         self._write(AceMessage.request.START(command.upper(), paramsdict))
-        try: return self._urlresult.get(timeout=self._videotimeout) # Get url for play from AceEngine
+        try: return self._url.get(timeout=self._videotimeout) # Get url for play from AceEngine
         except gevent.Timeout:
             errmsg = 'Engine response time %ssec exceeded. START URL not resived!' % self._videotimeout
             raise AceException(errmsg)
@@ -164,9 +156,9 @@ class AceClient(object):
             raise AceException(errmsg)
 
     def LOADASYNC(self, command, params):
-        self._result = AsyncResult()
+        self._loadasync = AsyncResult()
         self._write(AceMessage.request.LOADASYNC(command.upper(), random.randint(1, 100000), params))
-        try: return self._result.get(timeout=self._resulttimeout) # Get _contentinfo json
+        try: return self._loadasync.get(timeout=self._resulttimeout) # Get _contentinfo json
         except gevent.Timeout:
             errmsg = 'Engine response %ssec time exceeded. LOADARESP not resived!' % self._resulttimeout
             raise AceException(errmsg)
@@ -179,10 +171,10 @@ class AceClient(object):
         contentinfo = self.GETCONTENTINFO(command, value)
         if contentinfo['status'] in (1, 2):
             paramsdict = {'checksum':contentinfo['checksum'], 'infohash':contentinfo['infohash'], 'developer_id':'0', 'affiliate_id':'0', 'zone_id':'0'}
-            self._cidresult = AsyncResult()
+            self._cid = AsyncResult()
             self._write(AceMessage.request.GETCID(paramsdict))
             try:
-                cid = self._cidresult.get(timeout=self._resulttimeout)
+                cid = self._cid.get(timeout=self._resulttimeout)
                 return '' if cid is None or cid == '' else cid[2:]
             except gevent.Timeout:
                  errmsg = 'Engine response time %ssec exceeded. CID not resived!' % self._resulttimeout
@@ -203,89 +195,68 @@ class AceClient(object):
            errmsg = 'LOADASYNC returned error with message: %s' % contentinfo['message']
            raise AceException(errmsg)
 
-    def StreamReader(self, url, cid, counter, req_headers=None):
-        logger = logging.getLogger('StreamReader')
-        logger.debug('Start StreamReader for url: %s' % url)
-
-        self._write(AceMessage.request.EVENT('play'))
-
+    def AceStreamReader(self, url, cid, counter, req_headers=None):
+        '''
+        Get stream from AceEngine url and write it to client(s)
+        '''
+        logging.debug('Start StreamReader for url: %s' % url)
         with requests.Session() as session:
            if req_headers:
-               logger.debug('Sending headers from client to AceEngine: %s' % req_headers)
                session.headers.update(req_headers)
+               logging.debug('Sending headers from client to AceEngine: %s' % session.headers)
            try:
+              self._write(AceMessage.request.EVENT('play'))
               # AceEngine return link for HLS stream
               if url.endswith('.m3u8'):
                   _used_chunks = []
                   while self._state.get(timeout=self._resulttimeout)[0] in ('2', '3'):
-                     for line in session.get(url, stream=True, timeout = (5,None)).iter_lines():
-                        if self._state.get(timeout=self._resulttimeout)[0] not in ('2', '3'): return
-                        if line.startswith(b'http://') and line not in _used_chunks:
-                            self.RAWDataReader(session.get(line, stream=True, timeout=(5,None)).raw, cid, counter)
-                            _used_chunks.append(line)
-                            if len(_used_chunks) > 15: _used_chunks.pop(0)
-                     gevent.sleep(4)
+                    for line in session.get(url, stream=True, timeout=(5, self._videotimeout)).iter_lines():
+                       if line.startswith(b'download not found'): return
+                       if line.startswith(b'http://') and line not in _used_chunks:
+                          self.RAWDataReader(session.get(line, stream=True, timeout=(5, self._videotimeout)), counter.getClientsList(cid))
+                          _used_chunks.append(line)
+                          if len(_used_chunks) > 15: _used_chunks.pop(0)
               # AceStream return link for HTTP stream
-              else: self.RAWDataReader(session.get(url, stream=True, timeout = (5,None)).raw, cid, counter)
+              else: self.RAWDataReader(session.get(url, stream=True, timeout = (5, self._videotimeout)), counter.getClientsList(cid))
 
-           except requests.exceptions.HTTPError as err:
-                   logger.error('An http error occurred while connecting to aceengine: %s' % repr(err))
-           except requests.exceptions.RequestException:
-                   logger.error('There was an ambiguous exception that occurred while handling request')
            except Exception as err:
-                   logger.error('Unexpected error in streamreader %s' % repr(err))
-           finally:
-                   _used_chunks = None
-                   self._streamReaderQueue.queue.clear()
-                   counter.deleteAll(cid)
+              clients = counter.getClientsList(cid)
+              if clients:
+                 logging.error('"%s" StreamReader error: %s' % (clients[0].channelName, repr(err)))
+                 gevent.wait([gevent.spawn(self.write_chunk, c, b'', True) for c in clients]) #b'0\r\n\r\n' - send the chunked trailer
+           finally: _used_chunks = None
 
-    def RAWDataReader(self, stream, cid, counter):
-        logger = logging.getLogger('RAWDataReader')
+    def RAWDataReader(self, stream, clients):
+        for chunk in stream.iter_content(chunk_size=1048576 if 'Content-Length' in stream.headers else None):
+           if chunk: gevent.wait([gevent.spawn(self.write_chunk, c, chunk) for c in clients])
 
-        while self._state.get(timeout=self._resulttimeout)[0] in ('2', '3'):
-           gevent.sleep()
-           if self._state.get(timeout=self._resulttimeout)[0] == '2': # Read data from AceEngine only if STATE 2 (DOWNLOADING)
-              data = stream.read(requests.models.CONTENT_CHUNK_SIZE)
-              if not data: return
-              try: self._streamReaderQueue.put_nowait(data)
-              except gevent.queue.Full: self._streamReaderQueue.get_nowait(); self._streamReaderQueue.put_nowait(data)
-              clients = counter.getClients(cid)
-              if not clients: return
-              for c in clients:
-                 try: c.queue.put(data, timeout=5)
-                 except gevent.queue.Full:
-                     if len(clients) > 1:
-                         logger.warning('Client %s does not read data from buffer until 5sec - disconnect it' % c.handler.clientip)
-                         c.destroy()
-           elif (time.time() - self._state.get(timeout=self._resulttimeout)[1]) >= self._videotimeout: # STATE 3 (BUFFERING)
-                   logger.warning('No data received from AceEngine for %ssec - broadcast stoped' % self._videotimeout); return
+    def write_chunk(self, client, chunk, chunk_trailer=None):
+        try: client.out.write(b'%X\r\n%s\r\n' % (len(chunk), chunk)) if not client.transcoder else client.out.write(chunk)
+        except: client.destroy() # Client disconected
+        if chunk_trailer: client.destroy()
 
     def _recvData(self):
         '''
         Data receiver method for greenlet
         '''
-        logger = logging.getLogger('AceClient_recvdata')
-
         while 1:
-            gevent.sleep()
             try:
                 self._recvbuffer = self._socket.read_until('\r\n').strip()
-                logger.debug('<<< %s' % requests.compat.unquote(self._recvbuffer))
-            except gevent.GreenletExit: break
-            except:
+                logging.debug('<<< %s' % requests.compat.unquote(self._recvbuffer))
+            except Exception as e:
                 # If something happened during read, abandon reader.
-                logger.error('Exception at socket read. AceClient destroyed')
                 if not self._shuttingDown.ready(): self._shuttingDown.set()
+                raise AceException('Exception at socket read. AceClient destroyed %s' % repr(e))
                 return
             else: # Parsing everything only if the string is not empty
                 # HELLOTS
                 if self._recvbuffer.startswith('HELLOTS'):
                     # version=engine_version version_code=version_code key=request_key http_port=http_port
-                    self._result.set({ k:v for k,v in (x.split('=') for x in self._recvbuffer.split() if '=' in x) })
+                    self._auth.set({ k:v for k,v in (x.split('=') for x in self._recvbuffer.split() if '=' in x) })
                 # NOTREADY
-                elif self._recvbuffer.startswith('NOTREADY'): self._result.set('NOTREADY')
+                elif self._recvbuffer.startswith('NOTREADY'): self._auth.set('NOTREADY')
                 # AUTH
-                elif self._recvbuffer.startswith('AUTH'): self._result.set(self._recvbuffer.split()[1]) # user_auth_level
+                elif self._recvbuffer.startswith('AUTH'): self._auth.set(self._recvbuffer.split()[1]) # user_auth_level
                 # START
                 elif self._recvbuffer.startswith('START'):
                     # url [ad=1 [interruptable=1]] [stream=1] [pos=position]
@@ -296,13 +267,13 @@ class AceClient(object):
                         # ignore it, then do seekback in first EVENT position command
                         # AceStream sends us STOP and START again with new link.
                         # We use only second link then.
-                        self._urlresult.set(self._recvbuffer.split()[1]) # url for play
+                        self._url.set(self._recvbuffer.split()[1]) # url for play
                 # LOADRESP
                 elif self._recvbuffer.startswith('LOADRESP'):
-                    self._result.set(requests.compat.json.loads(requests.compat.unquote(''.join(self._recvbuffer.split()[2:]))))
+                    self._loadasync.set(requests.compat.json.loads(requests.compat.unquote(''.join(self._recvbuffer.split()[2:]))))
                 # STATE
                 elif self._recvbuffer.startswith('STATE'): # tuple of (state_id, time of appearance)
-                    self._state.set((self._recvbuffer.split()[1], time.time()))
+                    self._state.set((self._recvbuffer.split()[1], gevent.time.time()))
                 # STATUS
                 elif self._recvbuffer.startswith('STATUS'):
                     self._tempstatus = self._recvbuffer.split()[1]
@@ -320,7 +291,7 @@ class AceClient(object):
                     elif self._tempstatus.startswith('main:err'): # err;error_id;error_message
                        self._status.set_exception(AceException('%s with message %s' % (self._tempstatus.split(';')[0],self._tempstatus.split(';')[2])))
                 # CID
-                elif self._recvbuffer.startswith('##'): self._cidresult.set(self._recvbuffer)
+                elif self._recvbuffer.startswith('##'): self._cid.set(self._recvbuffer)
                 # INFO
                 elif self._recvbuffer.startswith('INFO'): pass
                 # EVENT
@@ -343,5 +314,6 @@ class AceClient(object):
                 # SHUTDOWN
                 elif self._recvbuffer.startswith('SHUTDOWN'):
                     self._socket.close()
-                    logger.debug('AceClient destroyed')
+                    logging.debug('AceClient destroyed')
                     break
+            finally: gevent.sleep()

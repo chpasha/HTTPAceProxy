@@ -10,7 +10,6 @@ __author__ = 'Dorik1972'
 import os
 import logging
 import bencode, hashlib
-import time
 import gevent
 from requests.compat import unquote
 from PluginInterface import AceProxyPlugin
@@ -100,7 +99,7 @@ class Torrentfilms(AceProxyPlugin):
 
         if headers_only:
            connection.send_response(200)
-           connection.send_header('Content-Type', 'application/x-mpegurl')
+           connection.send_header('Content-Type', 'audio/mpegurl; charset=utf-8')
            connection.send_header('Connection', 'close')
            connection.end_headers()
            return
@@ -109,7 +108,7 @@ class Torrentfilms(AceProxyPlugin):
         exported = self.createPlaylist(connection.headers['Host'], connection.reqtype, params.get('fmt', [''])[0]).encode('utf-8')
 
         connection.send_response(200)
-        connection.send_header('Content-Type', 'application/x-mpegurl')
+        connection.send_header('Content-Type', 'audio/mpegurl; charset=utf-8')
         connection.send_header('Access-Control-Allow-Origin', '*')
         connection.send_header('Content-Length', str(len(exported)))
         connection.send_header('Connection', 'close')

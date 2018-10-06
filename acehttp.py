@@ -26,17 +26,13 @@ for wheel in glob.glob(os.path.join(base_dir, 'modules/wheels/') + '*.whl'): sys
 
 import logging, traceback
 import psutil
-import time
 import requests
 try: from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
 except: from http.server import HTTPServer, BaseHTTPRequestHandler
-from gevent.baseserver import BaseServer
 try: from urlparse import parse_qs
 except: from urllib.parse import parse_qs
 from ipaddr import IPNetwork, IPAddress
-from socket import error as SocketException
-from socket import socket, AF_INET, SOCK_DGRAM, SHUT_RDWR
-from base64 import b64encode
+from socket import socket, AF_INET, SOCK_DGRAM, SHUT_RDWR, error as SocketException
 from modules.PluginInterface import AceProxyPlugin
 
 import aceclient
@@ -44,23 +40,35 @@ from aceclient.clientcounter import ClientCounter
 import aceconfig
 from aceconfig import AceConfig
 
-class GeventHTTPServer(HTTPServer):
+class HTTPServer(HTTPServer):
+
     def process_request(self, request, client_address):
+        # If firewall enabled
+        if AceConfig.firewall and not checkFirewall(client_address[0]):
+           logger.error('Dropping connection from {} due to firewall rules'.format(client_address[0]))
+           return
+        if not AceStuff.requestPool.full():
+              AceStuff.requestPool.spawn(self.__new_request, self.RequestHandlerClass, request, client_address, self)
+        else: logger.error('Maximum number of connections reached. Denial of service!')
+
+    def __new_request(self, handlerClass, request, address, server):
         checkAce() # Check is AceStream engine alive
-        gevent.spawn(self.process_request_thread, request, client_address)
+        try: handlerClass(request, address, server)
+        except SocketException: pass # fix the broken pipe errors
+        except Exception as e: logger.error(traceback.format_exc())
+        self.shutdown_request(request)
 
-    def process_request_thread(self, request, client_address):
-        try: self.finish_request(request, client_address)
-        except SocketException: pass
-        except Exception: self.handle_error(request, client_address)
-        finally: self.close_request(request)
+class BaseHTTPRequestHandler(BaseHTTPRequestHandler):
 
-    def handle_error(self, request, client_address):
-        logging.error(traceback.format_exc())
-        pass
+    def finish(self):
+        if not self.wfile.closed: self.wfile.flush()
+        self.wfile.close()
+        self.rfile.close()
 
 class HTTPHandler(BaseHTTPRequestHandler):
+
     server_version = 'HTTPAceProxy'
+    protocol_version = 'HTTP/1.1'
 
     def log_message(self, format, *args): pass
         #logger.debug('%s - %s - "%s"' % (self.address_string(), format%args, requests.compat.unquote(self.path).decode('utf8')))
@@ -84,20 +92,26 @@ class HTTPHandler(BaseHTTPRequestHandler):
         '''
         GET request handler
         '''
-        if self.request_version == 'HTTP/1.1': self.protocol_version = 'HTTP/1.1'
         logger = logging.getLogger('do_GET')
         # Connected client IP address
         self.clientip = self.headers['X-Forwarded-For'] if 'X-Forwarded-For' in self.headers else self.client_address[0]
         logger.info('Accepted connection from %s path %s' % (self.clientip, requests.compat.unquote(self.path)))
         logger.debug('Headers: %s' % dict(self.headers))
-
         params = requests.compat.urlparse(self.path)
         self.query, self.path = params.query, params.path[:-1] if params.path.endswith('/') else params.path
 
-        # If firewall enabled
-        if AceConfig.firewall and not checkFirewall(self.clientip):
-           self.dieWithError(403, 'Dropping connection from %s due to firewall rules' % self.clientip, logging.ERROR)  # 403 Forbidden
-           return
+        # Pretend to work fine with Fake or HEAD request.
+        if headers_only or AceConfig.isFakeRequest(self.path, self.query, self.headers):
+            # Return 200 and exit
+            if headers_only: logger.debug('Sending headers and closing connection')
+            else: logger.debug('Fake request - closing connection')
+            self.send_response(200)
+            self.send_header('Content-Type', 'video/mpeg')
+            self.senf_header('Transfer-Encoding', 'chunked')
+            self.send_header('Connection', 'Close')
+            self.end_headers()
+            self.wfile.write(b'0\r\n\r\n')
+            return
 
         try:
             self.splittedpath = self.path.split('/')
@@ -117,6 +131,7 @@ class HTTPHandler(BaseHTTPRequestHandler):
         # Handle request with plugin handler
         if self.reqtype in AceStuff.pluginshandlers:
             try: AceStuff.pluginshandlers.get(self.reqtype).handle(self, headers_only)
+            except SocketException: pass
             except Exception as e:
                 self.dieWithError(500, 'Plugin exception: %s' % repr(e))
                 logger.error(traceback.format_exc())
@@ -127,39 +142,21 @@ class HTTPHandler(BaseHTTPRequestHandler):
         logger = logging.getLogger('HandleRequest')
         self.reqparams, self.path = parse_qs(self.query), self.path[:-1] if self.path.endswith('/') else self.path
 
+        # Limit on the number of clients connected to broadcasts
+        if 0 < AceConfig.maxconns <= AceStuff.clientcounter.totalClients():
+            self.dieWithError(503, "Maximum client connections reached, can't serve request from %" % self.clientip, logging.ERROR)  # 503 Service Unavailable
+            return
+
         self.videoextdefaults = ('.3gp', '.aac', '.ape', '.asf', '.avi', '.dv', '.divx', '.flac', '.flc', '.flv', '.m2ts', '.m4a', '.mka', '.mkv',
                                  '.mpeg', '.mpeg4', '.mpegts', '.mpg4', '.mp3', '.mp4', '.mpg', '.mov', '.m4v', '.ogg', '.ogm', '.ogv', '.oga',
                                  '.ogx', '.qt', '.rm', '.swf', '.ts', '.vob', '.wmv', '.wav', '.webm')
-
-        # If firewall enabled
-        if AceConfig.firewall and not checkFirewall(self.clientip):
-           self.dieWithError(403, 'Dropping connection from %s due to firewall rules' % self.clientip, logging.ERROR)  # 403 Forbidden
-           return
-
         # Check if third parameter exists…/self.reqtype/blablablablabla/video.mpg
-        #                                                     |_________|
         # And if it ends with regular video extension
         try:
             if not self.path.endswith(self.videoextdefaults):
                 self.dieWithError(400, 'Request seems like valid but no valid video extension was provided', logging.ERROR)
                 return
         except IndexError: self.dieWithError(400, 'Bad Request', logging.WARNING); return  # 400 Bad Request
-
-        # Limit concurrent connections
-        if 0 < AceConfig.maxconns <= AceStuff.clientcounter.total:
-            self.dieWithError(503, "Maximum client connections reached, can't serve request from %" % self.clientip, logging.ERROR)  # 503 Service Unavailable
-            return
-
-        # Pretend to work fine with Fake or HEAD request.
-        if headers_only or AceConfig.isFakeRequest(self.path, self.reqparams, self.headers):
-            # Return 200 and exit
-            if headers_only: logger.debug('Sending headers and closing connection')
-            else: logger.debug('Fake request - closing connection')
-            self.send_response(200)
-            self.send_header('Content-Type', 'video/mpeg')
-            self.send_header('Connection', 'Close')
-            self.end_headers()
-            return
 
         # Make dict with parameters
         # [file_indexes, developer_id, affiliate_id, zone_id, stream_id]
@@ -168,111 +165,80 @@ class HTTPHandler(BaseHTTPRequestHandler):
             paramsdict[aceclient.acemessages.AceConst.START_PARAMS[i-3]] = self.splittedpath[i] if self.splittedpath[i].isdigit() else '0'
         paramsdict[self.reqtype] = requests.compat.unquote(self.splittedpath[2]) #self.path_unquoted
         #End parameters dict
-        self.client = None
+        self.connectionTime = gevent.time.time()
+        CID = NAME = None
         try:
-            CID, NAME = self.getINFOHASH(self.reqtype, paramsdict[self.reqtype], paramsdict['file_indexes'])
-            if not channelName: channelName = NAME
-            if not channelIcon: channelIcon = 'http://static.acestream.net/sites/acestream/img/ACE-logo.png'
-            # Create client
-            self.client = Client(self, CID, channelName, channelIcon)
+            if not AceStuff.clientcounter.idleAce:
+               logger.debug('Create connection to AceEngine.....')
+               AceStuff.clientcounter.idleAce = aceclient.AceClient(AceConfig.ace, AceConfig.aceconntimeout, AceConfig.aceresulttimeout)
+               AceStuff.clientcounter.idleAce.aceInit(AceConfig.acesex, AceConfig.aceage, AceConfig.acekey, AceConfig.videoseekback, AceConfig.videotimeout)
+            if self.reqtype not in ('direct_url', 'efile_url'):
+               CID, NAME = AceStuff.clientcounter.idleAce.GETINFOHASH(self.reqtype, paramsdict[self.reqtype], paramsdict['file_indexes'])
+            self.channelName = NAME if not channelName else channelName
+            self.channelIcon = 'http://static.acestream.net/sites/acestream/img/ACE-logo.png' if not channelIcon else channelIcon
             # If there is no existing broadcast we create it
-            if AceStuff.clientcounter.add(CID, self.client) == 1:
-                logger.warning('Create a broadcast "%s"' % self.client.channelName)
+            if AceStuff.clientcounter.addClient(CID, self) == 1:
+                logger.warning('Create a broadcast "%s"' % self.channelName)
                 # Send START commands to AceEngine and Getting URL from engine
-                url = self.client.ace.START(self.reqtype, paramsdict, AceConfig.acestreamtype)
+                url = self.ace.START(self.reqtype, paramsdict, AceConfig.acestreamtype)
                 # Rewriting host:port for remote Ace Stream Engine
                 if not AceStuff.ace:
                   url = requests.compat.urlparse(url)._replace(netloc='%s:%s' % (AceConfig.ace['aceHostIP'], AceConfig.ace['aceHTTPport'])).geturl()
                 # Start streamreader for broadcast
-                gevent.spawn(self.client.ace.StreamReader, url, CID, AceStuff.clientcounter)
-                logger.warning('Broadcast "%s" created' % self.client.channelName)
+                gevent.spawn(self.ace.AceStreamReader, url, CID, AceStuff.clientcounter)
+                #except: pass
+                logger.warning('Broadcast "%s" created' % self.channelName)
 
         except aceclient.AceException as e: self.dieWithError(500, 'AceClient exception: %s' % repr(e))
         except Exception as e: self.dieWithError(500, 'Unkonwn exception: %s' % repr(e))
         else:
             # streaming to client
-            self.client.handle(self.reqparams.get('fmt', [''])[0])
-            logger.info('Streaming "%s" to %s finished' % (self.client.channelName, self.clientip))
+            self.transcoder = None
+            self.out = self.wfile
+            if fmt and AceConfig.osplatform != 'Windows':
+                if fmt in AceConfig.transcodecmd:
+                    stderr = None if AceConfig.loglevel == logging.DEBUG else DEVNULL
+                    popen_params = { 'bufsize': 1048576,
+                                     'stdin'  : gevent.subprocess.PIPE,
+                                     'stdout' : self.wfile,
+                                     'stderr' : stderr,
+                                     'shell'  : False }
+
+                    self.transcoder = gevent.subprocess.Popen(AceConfig.transcodecmd[fmt], **popen_params)
+                    self.out = self.transcoder.stdin
+                    logger.warning('Ffmpeg transcoding started')
+                else:
+                    logger.error("Can't found fmt key. Ffmpeg transcoding not started!")
+
+            logger.info('Streaming "%s" to %s started' % (self.channelName, self.clientip))
+            # Sending videostream headers to client
+            headers = { 'Connection': 'Keep-Alive', 'Keep-Alive': 'timeout=15, max=100', 'Accept-Ranges': 'none',
+                        'Content-Type': 'application/octet-stream', 'Transfer-Encoding': 'chunked' }
+            drop_headers = []
+
+            if self.transcoder: drop_headers.extend(['Transfer-Encoding'])
+
+            response_headers = [ (k,v) for (k,v) in headers.items() if k not in drop_headers ]
+            self.send_response(200)
+            logger.debug('Sending HTTPAceProxy headers to client: %s' % dict(response_headers))
+            for (k,v) in response_headers: self.send_header(k,v)
+            self.end_headers()
+
+            while self.connection: gevent.sleep(0.5) # Stream data to client from AceStreamReader
+
+            if self.transcoder is not None:
+                try: self.transcoder.kill(); logger.warning('Ffmpeg transcoding stoped')
+                except: pass
+            logger.info('Streaming "%s" to %s finished' % (self.channelName, self.clientip))
+
         finally:
-            if self.client and AceStuff.clientcounter.delete(CID, self.client) == 0:
-                logger.warning('Broadcast "%s" stoped. Last client disconnected' % self.client.channelName)
-        return
-
-    def getINFOHASH(self, reqtype, url, idx):
-        if reqtype not in ('direct_url', 'efile_url'):
-            if not AceStuff.clientcounter.idleace: AceStuff.clientcounter.idleace = createAce()
-            return AceStuff.clientcounter.idleace.GETINFOHASH(reqtype, url, idx)
-
-class Client:
-
-    def __init__(self, handler, cid, channelName, channelIcon):
-        self.handler = handler
-        self.cid = cid
-        self.channelName = channelName
-        self.channelIcon = channelIcon
-        self.ace = self.queue = None
-        self.connectionTime = time.time()
-
-    def handle(self, fmt=None):
-        logger = logging.getLogger("ClientHandler")
-
-        if not self.ace._state.wait(timeout=5.0): # STATE 1 (PREBUFFERING)
-            self.handler.dieWithError(500, 'Video stream not opened in 5sec - disconnecting')
-            return
-
-        self.connectionTime = time.time()
-
-        remaining = self.connectionTime + AceConfig.videostartbuffertime
-        while  remaining >= time.time():
-           gevent.sleep()
-           if self.queue.qsize() >= self.ace._streamReaderQueue.maxsize: break
-
-        # Sending videostream headers to client
-        if self.handler.connection:
-            response_headers = {'Connection': 'Keep-Alive', 'Keep-Alive': 'timeout=15, max=100', 'Content-Type': 'application/octet-stream', 'Access-Control-Allow-Origin': '*'}
-            self.handler.send_response(200)
-            logger.debug('Sending HTTPAceProxy headers to client: %s' % response_headers)
-            for k,v in list(response_headers.items()): self.handler.send_header(k,v)
-            self.handler.end_headers()
-
-        transcoder = None
-        out = self.handler.wfile
-
-        if fmt and AceConfig.osplatform != 'Windows':
-            if fmt in AceConfig.transcodecmd:
-                stderr = None if AceConfig.loglevel == logging.DEBUG else DEVNULL
-                popen_params = { 'bufsize': requests.models.CONTENT_CHUNK_SIZE,
-                                 'stdin'  : gevent.subprocess.PIPE,
-                                 'stdout' : self.handler.wfile,
-                                 'stderr' : stderr,
-                                 'shell'  : False }
-
-                transcoder = gevent.subprocess.Popen(AceConfig.transcodecmd[fmt], **popen_params)
-                out = transcoder.stdin
-                logger.warning('Ffmpeg transcoding started')
-            else:
-                logger.error("Can't found fmt key. Ffmpeg transcoding not started!")
-
-        logger.info('Streaming "%s" to %s started. Start buffer size: %s' % \
-                 (self.channelName, self.handler.clientip, AceConfig.bytes2human(self.queue.qsize()*requests.models.CONTENT_CHUNK_SIZE)))
-
-        while self.handler.connection:
-            gevent.sleep()
-            try: out.write(self.queue.get(timeout=AceConfig.videotimeout))
-            except gevent.queue.Empty:
-                logger.warning('No data received from StreamReader for %ssec - disconnecting "%s"' % (AceConfig.videotimeout,self.channelName))
-                break
-            except: break
-
-        if transcoder is not None:
-           try: transcoder.kill(); logger.warning('Ffmpeg transcoding stoped')
-           except: pass
-        self.destroy()
+            if CID and AceStuff.clientcounter.deleteClient(CID, self) == 0:
+                logger.warning('Broadcast "%s" stoped. Last client disconnected' % self.channelName)
         return
 
     def destroy(self):
-            if self.queue: self.queue.queue.clear()
-            if self.handler.connection: self.handler.connection.close()
+            if self.connection: self.connection.close()
+            self.connection = None
 
 class AceStuff(object):
     '''
@@ -324,15 +290,6 @@ def spawnAce(cmd, delay=0.1):
         AceStuff.ace = AceStuff.ace.get(timeout=delay)
         return isRunning(AceStuff.ace)
     except: return False
-
-def createAce(): # Create telnet connection to the AceEngine API port
-    logger.debug('Create connection to AceEngine.....')
-    try: ace = aceclient.AceClient(AceConfig.ace, AceConfig.aceconntimeout, AceConfig.aceresulttimeout)
-    except:
-         logger.error('Ace Stream telnet connection failed'); raise
-    else:
-         ace.aceInit(AceConfig.acesex, AceConfig.aceage, AceConfig.acekey, AceConfig.videoseekback, AceConfig.videotimeout)
-         return ace
 
 def checkAce():
     if AceConfig.acespawn and not isRunning(AceStuff.ace):
@@ -478,7 +435,6 @@ except AttributeError: pass  # not available on Windows
 
 # Creating ClientCounter
 AceStuff.clientcounter = ClientCounter()
-
 #### AceEngine startup
 AceStuff.ace = findProcess('ace_engine.exe' if AceConfig.osplatform == 'Windows' else os.path.basename(AceConfig.acecmd))
 if not AceStuff.ace and AceConfig.acespawn:
@@ -525,7 +481,8 @@ for i in [os.path.splitext(os.path.basename(x))[0] for x in glob.glob('plugins/*
     AceStuff.pluginlist.append(plugininstance)
 
 # Start complite. Wating for requests
-server = GeventHTTPServer((AceConfig.httphost, AceConfig.httpport), HTTPHandler)
+AceStuff.requestPool = gevent.pool.Pool(AceConfig.maxconns*2)
+server = HTTPServer((AceConfig.httphost, AceConfig.httpport), HTTPHandler)
 logger.info('Server started at %s:%s Use <Ctrl-C> to stop' % (AceConfig.httphost, AceConfig.httpport))
 try: server.serve_forever()
 except (KeyboardInterrupt, SystemExit): shutdown()
